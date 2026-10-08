@@ -551,3 +551,58 @@ Adapters (FFmpegBackend, SDLAudioSink, SDLVideoSink, QSettingsRepository)
 - 硬件解码与滤镜链需要真实媒体文件、显卡驱动和多平台设备才能确认输出正确性与性能；
 - 字幕仅完成“提供者 + 解析”，**屏幕字幕渲染（含时间轴驱动与样式）尚未实现**，需要在 `Show` 侧增加渲染与时间同步；
 - 解码队列竞态、快速切换与设备失效场景仍需压力测试。
+
+## 23. 当前轮次：移除音频可视化遗留的 1 MB 死字段
+
+播放实测内存为 130–180 MB，拆解后确认属正常区间（Qt6 + DLL 基线实测 40.2 MB 工作集，其余为解码线程帧缓冲、纹理/渲染器后备缓冲与包队列）。期间发现 `VideoState` 内音频可视化（RDFT/FFT，相关代码已注释）遗留的字段已无任何引用，属纯浪费：
+
+- 删除 `int16_t sample_array[SAMPLE_ARRAY_SIZE]`（1 MiB）、其索引 `sample_array_index`（4 B）以及随之失效的 `SAMPLE_ARRAY_SIZE` 宏；
+- `rdft_bits`、`xpos`、`last_vis_time` 等其余可视化残留（合计约 16 B，同属 `RDFTContext *rdft` / `FFTSample *rdft_data` 注释块）本次保留，未扩大改动范围。
+
+编译期尺寸探针验证结果：`sizeof(VideoState)` 由 **1,055,272 字节降至 6,696 字节**，差值 1,048,576 字节 = 恰好 1 MiB。主工程与测试构建通过，24/24 测试通过。
+
+## 24. 当前轮次：画中画接入（渲染目标切换）
+
+对应文档第 7 节“多窗口/画中画”和第 10 节“决策点：是否需要多窗口/多会话”。真正的多会话要求多个独立 `PlaybackSession`，而 `VideoCtrl` 仍是单例并只持有一个 `m_cur_stream`，去单例化还牵连 `g_show_rect_mutex`、`g_audio_callback_time`、`log_file` 和 SDL 音频回调中的 `GetInstance()`。因此本轮先交付**单会话画中画**：播放会话保持不变，只切换视频渲染所绑定的原生窗口。这一步同时建立了多会话将来需要的渲染目标端口。
+
+### 24.1 后端渲染目标端口
+
+- `IPlaybackBackend` 新增纯虚 `OnSetRenderTarget(WId)`；`PlaybackService::setRenderTarget(WId)` 复用既有 `enqueue()` 在服务所属线程串行投递，UI 层依旧不接触后端实现；
+- `tests/fakeplaybackbackend.h` 同步实现该接口并记录调用次数与目标句柄，新增 `PlaybackServiceTest::renderTargetCommandIsForwarded` 覆盖命令转发。
+
+### 24.2 VideoCtrl 的跨线程切换
+
+SDL 窗口由 `SDL_CreateWindowFrom(WId)` 包装 Qt 的原生窗口，渲染器有线程亲和性，只能在创建它的 SDL 线程上操作。实机探针验证（Qt 6.7.2 MinGW + Windows，见 24.5）表明：`QWidget` 重新设定父子关系时，Qt 通过 Win32 `SetParent` 把**同一个** HWND 迁移到新的顶层窗口，`winId()` 不变，SDL 仍能正常渲染并自动跟随新的窗口尺寸。因此切换分为两种情况：
+
+- Qt 主线程调用 `OnSetRenderTarget()` 时只写入 `std::atomic` 的待处理句柄与标志（播放线程未启动时直接记录，供下次 `start_play` 使用），不触碰任何渲染资源；
+- SDL 线程在 `refresh_loop_wait_event()` 的刷新循环与空闲事件循环中调用 `applyPendingRenderTarget()`；
+- **句柄未变化**（Qt 迁移同一窗口，实测主路径）：只调用 `syncRenderTargetSize()` 读取新窗口尺寸、更新渲染区域并置 `force_refresh`，不重建任何资源，避免切换闪烁；
+- **句柄变化**（防御性分支，例如平台或 Qt 版本重建了原生窗口）：释放 `VideoOutputResources` 并令 `m_video_open = false`，由既有 `video_open()` 在新窗口上重建窗口/渲染器/纹理；纹理随窗口释放后，`resetUploadedFlags()` 在 `pictq` 锁内清零 `uploaded` 并置 `force_refresh`，保证队列中的帧重新上传；
+- 播放结束（无活动流、只剩最后一帧）时不存在 `video_open()` 路径，`redrawLastFrame()` 用 `m_last_frame` 在新目标上重建纹理并重绘。
+
+### 24.3 UI 层画中画
+
+- `Show::SetPipActive(bool)` 把视频容器 `label` 移入无边框置顶的 `Qt::Tool` 悬浮窗，`winId()` 随之变化后再通知后端切换，使播放不中断；退出时把容器归还 `Show` 并恢复 `ChangeShow()` 的几何计算；
+- 画中画模式下 `ChangeShow()` 直接返回，视频尺寸交由悬浮窗布局管理；`Show` 析构时会先把容器归还，避免与悬浮窗重复释放；
+- 画中画模式的鼠标语义：按下并拖动移动悬浮窗，未产生拖动则在松开时切换播放/暂停，从而与原有的“单击画面暂停”语义兼容；视频画面右键菜单可进出画中画；
+- `MainWindow` 新增“画中画”菜单项与全局快捷键 `Ctrl+P`（`ApplicationShortcut`，焦点在悬浮窗上时仍生效），通过 `SigPipActiveChanged` 同步菜单勾选；进入全屏前自动退出画中画。
+
+### 24.4 验证结果
+
+- 主工程 Qt 6.7.2 MinGW Release 构建通过；
+- 测试扩展到 4 个测试类共 25 项，全部通过（`MediaLocatorTest` 10、`SubtitlePluginTest` 8、`PlaybackServiceTest` 7，新增 `renderTargetCommandIsForwarded`）；
+- 应用启动冒烟测试通过（持续运行，无早期退出）。
+
+### 24.5 关键行为验证与仍需确认
+
+为确认“视频容器迁移到另一个顶层窗口后 SDL 是否仍可用”，本轮用临时探针程序（不属于仓库，验证后已删除）在真实 Windows 平台实测：
+
+- `label` 迁移到悬浮窗后 `winId()` **不变**（同为 4328492），而其 Win32 父窗口由主窗口 HWND 变为悬浮窗 HWND，迁回后恢复；
+- `SDL_CreateWindowFrom` 绑定该 HWND 后，迁移前后 `SDL_RenderClear` 均返回 0，`SDL_GetError()` 为空，说明 SDL 在迁移后的窗口上仍能正常渲染；
+- `SDL_GetWindowSize` 由 960x540 变为 447x237，与视频容器的实际尺寸同步变化，说明 SDL 能跟随迁移后的窗口尺寸。
+
+仍需真实播放确认：
+
+- 画中画切换瞬间的画面连续性，以及播放结束后切换时 `redrawLastFrame()` 的表现；
+- D3D 交换链在窗口迁移后是否需要额外的 `ResizeBuffers`（探针中 clear/present 无错误，但未验证实际帧内容）；
+- 真正的多会话（同时播放两个独立视频）仍要求 `VideoCtrl` 去单例化与全局状态隔离，本轮的 `OnSetRenderTarget` 端口可作为其中一环继续复用。

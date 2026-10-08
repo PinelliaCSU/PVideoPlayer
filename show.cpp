@@ -3,6 +3,8 @@
 #include <QDebug>
 #include <QtMath>
 #include <QMutex>
+#include <QMenu>
+#include <QVBoxLayout>
 #include <QPropertyAnimation>
 #include <QGraphicsOpacityEffect>
 #include "guiutils.h"
@@ -45,6 +47,13 @@ Show::Show(QWidget *parent)
 
 Show::~Show()
 {
+    if (_pipWindow) {
+        // 视频容器若仍在悬浮窗中，先归还给 Show，避免随悬浮窗一起被销毁
+        ui->label->setParent(this);
+        delete _pipWindow;
+        _pipWindow = nullptr;
+        _pipLayout = nullptr;
+    }
     delete ui;
 }
 
@@ -109,10 +118,45 @@ void Show::resizeEvent(QResizeEvent *event)
 
 bool Show::eventFilter(QObject *obj, QEvent *event)
 {
-    if (obj == ui->label && event->type() == QEvent::MouseButtonPress) {
-        qDebug() << "Show::eventFilter - label clicked, toggle play/pause";
-        emit SigTogglePlay();
-        return true; // 事件已处理
+    if (obj == ui->label) {
+        switch (event->type()) {
+        case QEvent::MouseButtonPress: {
+            QMouseEvent *mouseEvent = static_cast<QMouseEvent *>(event);
+            if (_pipActive && mouseEvent->button() == Qt::LeftButton && _pipWindow) {
+                // 画中画模式下按下先视为拖动起点，松开时未拖动才切换播放状态
+                _pipDragging = true;
+                _pipDragMoved = false;
+                _pipDragOffset = mouseEvent->globalPosition().toPoint() - _pipWindow->pos();
+                return true;
+            }
+            qDebug() << "Show::eventFilter - label clicked, toggle play/pause";
+            emit SigTogglePlay();
+            return true; // 事件已处理
+        }
+        case QEvent::MouseMove: {
+            if (_pipActive && _pipDragging && _pipWindow) {
+                QMouseEvent *mouseEvent = static_cast<QMouseEvent *>(event);
+                _pipDragMoved = true;
+                _pipUserMoved = true;
+                _pipWindow->move(mouseEvent->globalPosition().toPoint() - _pipDragOffset);
+                return true;
+            }
+            break;
+        }
+        case QEvent::MouseButtonRelease: {
+            if (_pipActive && _pipDragging) {
+                _pipDragging = false;
+                if (!_pipDragMoved) {
+                    emit SigTogglePlay();
+                }
+                _pipDragMoved = false;
+                return true;
+            }
+            break;
+        }
+        default:
+            break;
+        }
     }
     return QWidget::eventFilter(obj, event);
 }
@@ -166,6 +210,9 @@ bool Show::connectionSignalSlots()
     bRet = connect(this, &Show::SigPlay, this, &Show::OnPlay);
     connect(_toastTimer, &QTimer::timeout, this, &Show::OnToastTimeout);
     connect(_shortcutHintTimer, &QTimer::timeout, this, &Show::OnShortcutHintTimeout);
+    // 在视频画面上右键可切换画中画
+    ui->label->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(ui->label, &QWidget::customContextMenuRequested, this, &Show::OnVideoContextMenuRequested);
 
     return bRet;
 }
@@ -194,6 +241,10 @@ void Show::OnFrameDimensionsChanged(int nFrameWidth, int nFrameHeight)
 }
 
 void Show::ChangeShow(){
+    if (_pipActive) {
+        // 画中画模式下视频容器由悬浮窗布局管理，不再跟随 Show 尺寸
+        return;
+    }
     g_show_rect_mutex.lock();
     qDebug() << "Show::ChangeShow - size:" << width() << "x" << height() << "frame:" << _nLastFrameWidth << "x" << _nLastFrameHeight;
     // 让 label 铺满整个 Show widget，SDL 内部自行处理等比缩放和居中
@@ -276,6 +327,73 @@ void Show::OnShortcutHintTimeout()
 {
     if (_shortcutHintLabel) {
         _shortcutHintLabel->hide();
+    }
+}
+
+bool Show::IsPipActive() const
+{
+    return _pipActive;
+}
+
+void Show::SetPipActive(bool active)
+{
+    if (_pipActive == active) {
+        return;
+    }
+
+    if (active) {
+        if (!_pipWindow) {
+            // 无边框、置顶的独立小窗；不随主窗口最小化
+            _pipWindow = new QWidget(nullptr, Qt::Window | Qt::FramelessWindowHint | Qt::Tool | Qt::WindowStaysOnTopHint);
+            _pipWindow->setWindowTitle(tr("画中画"));
+            _pipLayout = new QVBoxLayout(_pipWindow);
+            _pipLayout->setContentsMargins(0, 0, 0, 0);
+            _pipLayout->setSpacing(0);
+        }
+
+        // 把视频容器移入悬浮窗，winId 变化后由后端在新的原生窗口上重建渲染资源
+        _pipLayout->addWidget(ui->label);
+        ui->label->show();
+
+        const int pipWidth = 360;
+        int pipHeight = 203;
+        if (_nLastFrameWidth > 0 && _nLastFrameHeight > 0) {
+            pipHeight = qMax(120, pipWidth * _nLastFrameHeight / _nLastFrameWidth);
+        }
+        _pipWindow->resize(pipWidth, pipHeight);
+        if (!_pipUserMoved) {
+            const QPoint anchor = this->mapToGlobal(QPoint(this->width(), this->height()));
+            _pipWindow->move(anchor - QPoint(pipWidth + 24, pipHeight + 24));
+        }
+        _pipWindow->show();
+        _pipWindow->raise();
+        // 先让布局确定视频容器的新尺寸，后端随后按该尺寸同步渲染区域
+        _pipLayout->activate();
+        _pipActive = true;
+    } else {
+        if (_pipWindow) {
+            _pipWindow->hide();
+        }
+        ui->label->setParent(this);
+        ui->label->show();
+        _pipActive = false;
+        ChangeShow();
+    }
+
+    // 播放会话保持不变，仅把渲染目标切换到视频容器当前所在的窗口
+    if (_playback_service) {
+        _playback_service->setRenderTarget(ui->label->winId());
+    }
+
+    emit SigPipActiveChanged(_pipActive);
+}
+
+void Show::OnVideoContextMenuRequested(const QPoint &pos)
+{
+    QMenu menu(this);
+    QAction *act_pip = menu.addAction(_pipActive ? tr("退出画中画") : tr("画中画"));
+    if (menu.exec(ui->label->mapToGlobal(pos)) == act_pip) {
+        SetPipActive(!_pipActive);
     }
 }
 

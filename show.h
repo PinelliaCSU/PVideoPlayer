@@ -11,6 +11,7 @@
 #include<QEvent>
 
 class PlaybackService;
+class QVBoxLayout;
 namespace Ui {
 class Show;
 }
@@ -31,6 +32,10 @@ public:
     void HideShortcutHint(); // 强制隐藏快捷键提示
     QString getCurrentFile();
     void OnStartPlay(QString filename);
+
+    // 画中画：把视频画面移入可拖动的置顶悬浮小窗，主窗口继续可用，播放不中断
+    bool IsPipActive() const;
+    void SetPipActive(bool active);
 protected:
     void dropEvent(QDropEvent *event);
     void dragEnterEvent(QDragEnterEvent *event);
@@ -41,12 +46,14 @@ private:
     void ChangeShow();
     bool initUi();
     bool connectionSignalSlots();
+    void OnVideoContextMenuRequested(const QPoint &pos);
 
 signals:
     void SigPlay(QString strFile);
     void SigOpenFile(QString strFile);
     void SigExitFullScreen();
     void SigTogglePlay();   //点击视频实现暂停
+    void SigPipActiveChanged(bool active);
 private slots:
     void OnToastTimeout();
     void OnShortcutHintTimeout();
@@ -58,6 +65,14 @@ private:
 
     QString _current_file; // 当前播放的文件路径
     PlaybackService *_playback_service = nullptr;
+
+    QWidget *_pipWindow = nullptr;       // 画中画悬浮窗口（无边框、置顶）
+    QVBoxLayout *_pipLayout = nullptr;   // 悬浮窗口内的视频容器布局
+    bool _pipActive = false;             // 是否处于画中画模式
+    bool _pipUserMoved = false;          // 用户是否拖动过悬浮窗（拖动后不再自动定位）
+    bool _pipDragging = false;           // 是否正在拖动悬浮窗
+    bool _pipDragMoved = false;          // 本次按下是否产生了拖动
+    QPoint _pipDragOffset;               // 拖动时鼠标相对悬浮窗左上角的偏移
 
     QLabel *_toastLabel;  // 提示标签（使用顶层窗口实现透明，右上角显示）
     QTimer *_toastTimer;  // 提示定时器

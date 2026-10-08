@@ -48,6 +48,8 @@ public:
     virtual void OnSubVolume() = 0;
     virtual void OnStep() = 0;
     virtual bool OnExtractAudio(const QString &inputFile, const QString &outputFile) = 0;
+    // 切换视频渲染目标的原生窗口句柄（画中画等场景复用当前播放会话，不中断播放）
+    virtual void OnSetRenderTarget(WId playWidgetId) = 0;
 };
 
 // 默认播放后端（真实实现由 VideoCtrl 提供）。

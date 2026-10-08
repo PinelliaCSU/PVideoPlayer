@@ -6,6 +6,8 @@
 #include<QThread>
 #include<QString>
 
+#include <atomic>
+
 
 
 
@@ -57,6 +59,9 @@ public:
 
     //获取音频
     bool OnExtractAudio(const QString &inputFile, const QString &outputFile) override;
+
+    // 切换渲染目标原生窗口（画中画）：保持当前播放会话，在新的窗口上重建渲染资源
+    void OnSetRenderTarget(WId play_wid) override;
 signals:
     void SigStop();
 private:
@@ -103,6 +108,14 @@ private:
     void stream_seek_forward();
     void stream_cycle_channel(int media_type);
 
+    // 渲染目标切换：applyPendingRenderTarget 必须运行在 SDL 线程（loop_thread）
+    void applyPendingRenderTarget();
+    // 原生窗口句柄未变（Qt 迁移了同一个窗口）时，按新窗口尺寸同步渲染区域
+    void syncRenderTargetSize();
+    // 播放已结束（无活动流）时，在新的渲染目标上重绘最后一帧
+    void redrawLastFrame();
+    static void resetUploadedFlags(VideoState *is);
+
     void toggle_full_screen();
     void update_volume(int sign, double step);
     void add_volume();
@@ -139,6 +152,10 @@ private:
     AudioExtractionService m_audio_extraction_service;
     AudioOutputDevice m_audio_output;
     VideoOutputResources m_video_output_resources;  // 窗口、渲染器、纹理与渲染原语的所有者
+
+    // 渲染目标切换请求（Qt 主线程写入，SDL 线程消费）
+    std::atomic<bool> m_rebind_pending{false};
+    std::atomic<quintptr> m_pending_wid{0};
 
     bool m_audio_force_play = true;//音频强制播放一帧，配合step使用
 public:

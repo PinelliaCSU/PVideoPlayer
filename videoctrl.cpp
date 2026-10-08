@@ -1743,6 +1743,11 @@ void VideoCtrl::loop_thread(VideoState *curStream) {
      * 线程直接退出，避免 join() 死锁。
      */
     while (m_idle_loop) {
+        applyPendingRenderTarget();
+        // 渲染目标切换后窗口已被释放，用最后一帧在新窗口上重绘
+        if (!m_video_output_resources.window()) {
+            redrawLastFrame();
+        }
         // SDL_WaitEventTimeout 返回 0 表示超时无事件，此时 event 未填充，需跳过处理
         if (!SDL_WaitEventTimeout(&event, 100))
             continue;
@@ -1785,6 +1790,8 @@ void VideoCtrl::refresh_loop_wait_event(VideoState *is, SDL_Event *event) {
 
     // 当没有键盘事件的时候，就进行图片刷新。也就是说一旦遇到的了键盘事件，那么就退出了这个while循环，返回到上一层的switch处理对应的键盘事件了
     while (!SDL_PeepEvents(event, 1, SDL_GETEVENT, SDL_FIRSTEVENT, SDL_LASTEVENT) && m_play_loop) {
+        // 渲染目标切换请求由 SDL 线程执行，避免跨线程操作渲染资源
+        applyPendingRenderTarget();
         // 如果需要休眠等待的话
         if (remainingTime > 0.0)
             av_usleep((int64_t)(remainingTime * 1000000.0));
@@ -2583,4 +2590,136 @@ void VideoCtrl::update_speed(float speed) {
 bool VideoCtrl::OnExtractAudio(const QString &inputFile, const QString &outputFile)
 {
     return m_audio_extraction_service.extract(inputFile, outputFile);
+}
+
+// ==================== 渲染目标切换（画中画） ====================
+
+void VideoCtrl::OnSetRenderTarget(WId play_wid)
+{
+    if (play_wid == 0) {
+        return;
+    }
+    if (!m_play_loop_thread.joinable()) {
+        // 播放线程尚未启动：直接记录，下次开始播放时使用新的窗口
+        m_play_wid = play_wid;
+        return;
+    }
+    // 统一交由 SDL 线程处理，播放中、暂停和播放结束（空闲循环）三种情况都适用
+    m_pending_wid.store(static_cast<quintptr>(play_wid));
+    m_rebind_pending.store(true);
+}
+
+void VideoCtrl::applyPendingRenderTarget()
+{
+    if (!m_rebind_pending.exchange(false)) {
+        return;
+    }
+    const WId wid = static_cast<WId>(m_pending_wid.exchange(0));
+    if (wid == 0) {
+        return;
+    }
+
+    if (wid != m_play_wid) {
+        /*
+         * 旧的 SDL 窗口包装的是已经被 Qt 销毁的原生窗口，继续在其上渲染会失败。
+         * 因此整体释放窗口/渲染器/纹理，随后由 video_open()（有活动流）或
+         * redrawLastFrame()（仅有最后一帧）在新的原生窗口上重建。
+         */
+        m_play_wid = wid;
+        m_video_output_resources.reset();
+        m_video_open = false;
+
+        if (m_cur_stream) {
+            // 纹理已释放，队列中标记为已上传的帧需要重新上传
+            resetUploadedFlags(m_cur_stream);
+            m_cur_stream->force_refresh = 1;
+        }
+        return;
+    }
+
+    // 句柄未变化：Qt 只是把同一个原生窗口迁移到了新的父窗口，无需重建渲染资源
+    syncRenderTargetSize();
+}
+
+void VideoCtrl::syncRenderTargetSize()
+{
+    if (!m_video_output_resources.window()) {
+        return;
+    }
+
+    int w = m_screen_width;
+    int h = m_screen_height;
+    m_video_output_resources.getWindowSize(&w, &h);
+    if (w <= 0 || h <= 0) {
+        return;
+    }
+    m_screen_width = w;
+    m_screen_height = h;
+
+    if (m_cur_stream) {
+        m_cur_stream->width = w;
+        m_cur_stream->height = h;
+        m_cur_stream->force_refresh = 1;
+        return;
+    }
+
+    // 播放已结束：直接按新的尺寸重绘最后一帧
+    redrawLastFrame();
+}
+
+void VideoCtrl::resetUploadedFlags(VideoState *is)
+{
+    if (!is || !is->pictq.mutex) {
+        return;
+    }
+    SDL_LockMutex(is->pictq.mutex);
+    for (int i = 0; i < FRAME_QUEUE_SIZE; ++i) {
+        is->pictq.queue[i].uploaded = 0;
+    }
+    SDL_UnlockMutex(is->pictq.mutex);
+}
+
+void VideoCtrl::redrawLastFrame()
+{
+    if (!m_last_frame || m_last_frame->width <= 0 || m_last_frame->height <= 0) {
+        return;
+    }
+
+    int w = m_screen_width;
+    int h = m_screen_height;
+    if (!m_video_output_resources.ensureWindow((void *)m_play_wid, &w, &h)) {
+        av_log_error("SDL create window error when rebinding render target\n");
+        return;
+    }
+    m_screen_width = w;
+    m_screen_height = h;
+
+    if (!m_video_output_resources.ensureRenderer()) {
+        av_log_error("SDL create render error when rebinding render target\n");
+        return;
+    }
+
+    const int sdlPixFmt = m_last_frame->format == AV_PIX_FMT_YUV420P ? SDL_PIXELFORMAT_YV12 : SDL_PIXELFORMAT_ARGB8888;
+    if (!m_video_output_resources.ensureTexture(sdlPixFmt, m_last_frame->width, m_last_frame->height, SDL_BLENDMODE_NONE)) {
+        return;
+    }
+
+    SwsContextPtr sws_ctx;
+    if (upload_texture(m_video_output_resources.texture(), m_last_frame.get(), sws_ctx) < 0) {
+        return;
+    }
+
+    m_frame_width = m_last_frame->width;
+    m_frame_height = m_last_frame->height;
+    m_frame_sar = m_last_frame->sample_aspect_ratio;
+
+    if (g_show_rect_mutex.tryLock()) {
+        m_video_output_resources.beginFrame();
+        SDL_Rect rect;
+        calculate_display_rect(&rect, 0, 0, m_screen_width, m_screen_height,
+                               m_frame_width, m_frame_height, m_frame_sar);
+        m_video_output_resources.presentTexture(rect, m_frame_flip_v);
+        m_video_output_resources.endFrame();
+        g_show_rect_mutex.unlock();
+    }
 }

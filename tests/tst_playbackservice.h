@@ -12,6 +12,7 @@ private slots:
     void emptyLocatorRaisesError();
     void commandsFromAnotherThreadAreSerialized();
     void sessionsAreIndependent();
+    void renderTargetCommandIsForwarded();
 };
 
 #endif // TST_PLAYBACKSERVICE_H

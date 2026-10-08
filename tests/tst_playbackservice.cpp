@@ -66,6 +66,18 @@ void PlaybackServiceTest::commandsFromAnotherThreadAreSerialized()
     callerThread.wait();
 }
 
+void PlaybackServiceTest::renderTargetCommandIsForwarded()
+{
+    FakePlaybackBackend backend;
+    PlaybackService service(&backend, &backend);
+
+    const WId target = 12345;
+    service.setRenderTarget(target);
+
+    QCOMPARE(backend.renderTargetCount, 1);
+    QCOMPARE(backend.lastRenderTarget, target);
+}
+
 void PlaybackServiceTest::sessionsAreIndependent()
 {
     FakePlaybackBackend firstBackend;

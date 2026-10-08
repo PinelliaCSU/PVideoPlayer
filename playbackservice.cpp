@@ -136,6 +136,11 @@ bool PlaybackService::extractAudio(const QString &inputFile, const QString &outp
     return m_backend->OnExtractAudio(inputFile, outputFile);
 }
 
+void PlaybackService::setRenderTarget(WId playWidgetId)
+{
+    enqueue([this, playWidgetId]() { m_backend->OnSetRenderTarget(playWidgetId); });
+}
+
 PlaybackState PlaybackService::state() const
 {
     return m_state;

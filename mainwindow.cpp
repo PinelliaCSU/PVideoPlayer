@@ -215,6 +215,10 @@ void MainWindow::SlotOnFullScreenBtnClicked(){
         this->setFocus();
     } else {
         // ===== 进入全屏 =====
+        // 画中画与全屏互斥：先把画面收回主窗口
+        if (ui->show->IsPipActive()) {
+            ui->show->SetPipActive(false);
+        }
         // 隐藏所有控制组件，只保留视频画面
         ui->ctrlBar->hide();
         ui->Playlist->hide();
@@ -272,6 +276,13 @@ void MainWindow::initMenu(){
     QAction* act_open_file = open_menu->addAction(tr("打开文件 \t Ctrl + F"));
     QAction* act_open_stream = open_menu->addAction(tr("打开视频流 \t Ctrl + L"));
     QAction* act_full_screen = _menu.addAction(tr("全屏/取消全屏 \t F11"));
+    QAction* act_pip = _menu.addAction(tr("画中画 \t Ctrl + P"));
+    act_pip->setCheckable(true);
+    connect(act_pip, &QAction::triggered, this, [this](bool checked) {
+        ui->show->SetPipActive(checked);
+    });
+    // 通过右键菜单或其它入口切换时，保持菜单勾选状态同步
+    connect(ui->show, &Show::SigPipActiveChanged, act_pip, &QAction::setChecked);
 
     // ========== 最近播放子菜单 ==========
     QMenu* recent_menu = _menu.addMenu(tr("最近播放"));
@@ -348,9 +359,12 @@ void MainWindow::initMenu(){
     act_open_file->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_F));
     act_open_stream->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_L));
     act_full_screen->setShortcut(QKeySequence(Qt::Key_F11));
+    act_pip->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_P));
 
     // 将行为设置为应用全局有效（F11需要全局生效，因为全屏时焦点在Show窗口上）
     act_full_screen->setShortcutContext(Qt::ApplicationShortcut);
+    // 画中画时焦点可能在悬浮小窗上，快捷键同样需要全局生效
+    act_pip->setShortcutContext(Qt::ApplicationShortcut);
 
     // 上下左右方向键设置为全局action（全屏时焦点在Show窗口上，也需要生效）
     QAction *act_seek_back = new QAction(this);
@@ -406,6 +420,7 @@ void MainWindow::initMenu(){
     this->addAction(act_open_file);
     this->addAction(act_open_stream);
     this->addAction(act_full_screen);
+    this->addAction(act_pip);
 }
 
 

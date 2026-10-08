@@ -33,6 +33,7 @@ public:
     void subVolume();
     void step();
     bool extractAudio(const QString &inputFile, const QString &outputFile);
+    void setRenderTarget(WId playWidgetId);
 
     PlaybackState state() const;
 

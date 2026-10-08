@@ -67,9 +67,6 @@ extern "C"{
 /* polls for possible required screen refresh at least this often, should be less than 1/fps */
 #define REFRESH_RATE 0.01
 
-/* NOTE: the size must be big enough to compensate the hardware audio buffersize size */
-#define SAMPLE_ARRAY_SIZE (8 * 65536)
-
 #define CURSOR_HIDE_DELAY 1000000
 
 #define USE_ONEPASS_SUBTITLE_RENDER 1
@@ -254,8 +251,6 @@ typedef struct VideoState {
     int frame_drops_early;
     int frame_drops_late;
 
-    int16_t sample_array[SAMPLE_ARRAY_SIZE];
-    int sample_array_index;
     int last_i_start;
     // RDFTContext *rdft;
     int rdft_bits;

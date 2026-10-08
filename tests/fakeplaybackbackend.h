@@ -74,6 +74,12 @@ public:
         return true;
     }
 
+    void OnSetRenderTarget(WId playWidgetId) override
+    {
+        lastRenderTarget = playWidgetId;
+        ++renderTargetCount;
+    }
+
     QString lastLocator;
     float lastSpeed = 1.0f;
     double lastVolume = 0.0;
@@ -81,6 +87,8 @@ public:
     int startCount = 0;
     int stopCount = 0;
     int userStopCount = 0;
+    int renderTargetCount = 0;
+    WId lastRenderTarget = 0;
     bool paused = false;
 };
 
