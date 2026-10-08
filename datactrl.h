@@ -2,6 +2,7 @@
 #define DATACTRL_H
 
 #define __STDC_CONSTANT_MACROS
+#include <new>
 #include <string>
 #include <thread>
 #include "media_raii.h"
@@ -77,9 +78,15 @@ extern "C"{
 
 //数据包列表
 typedef struct MyAVPacketList {
-    AVPacket pkt;
-    struct MyAVPacketList *next;
-    int serial;
+    AVPacket pkt{};
+    struct MyAVPacketList *next = nullptr;
+    int serial = 0;
+
+    // 节点拥有自己的 AVPacket 引用，析构时统一 unref，避免各条释放路径手工遗漏
+    ~MyAVPacketList()
+    {
+        av_packet_unref(&pkt);
+    }
 } MyAVPacketList;
 
 //数据包队列
@@ -164,7 +171,6 @@ enum {
 //解码器，管理数据队列
 typedef struct Decoder {
     AVPacket pkt;
-    AVPacket pkt_temp;
     PacketQueue *queue;
     AVCodecContext *avctx;
     AvCodecContextPtr owned_avctx;
@@ -178,6 +184,12 @@ typedef struct Decoder {
     int64_t next_pts;
     AVRational next_pts_tb;
     std::thread decode_thread;
+
+    // 解码器拥有待处理包（packet_pending 时由 send 失败暂存），析构时统一 unref
+    ~Decoder()
+    {
+        av_packet_unref(&pkt);
+    }
 } Decoder;
 
 //视频状态，管理所有的视频信息及数据
@@ -197,6 +209,9 @@ typedef struct VideoState {
     AVFormatContext *ic;
     AvFormatContextPtr owned_ic;
     DemuxReader demux_reader;
+    HardwareDecoderDevice hw_device; // 视频硬件解码设备（未启用时为 inactive）
+    FilterChain video_filter;        // 可选视频滤镜链（描述为空时不启用）
+    std::string filter_description;
     int realtime;
 
     Clock audclk;
@@ -291,7 +306,12 @@ static int packet_queue_put_private(PacketQueue *q, AVPacket *pkt)
     if (q->abort_request)
         return -1;
 
-    pkt1 = (MyAVPacketList *)av_malloc(sizeof(MyAVPacketList));
+    /*
+     * 节点接管 pkt 的所有权（浅拷贝转移引用），由 MyAVPacketList 析构统一 unref。
+     * 注意不能对 flush_pkt 使用 av_packet_move_ref：它会被重置，导致后续
+     * pkt.data == flush_pkt.data 的刷新包判定失效。
+     */
+    pkt1 = new (std::nothrow) MyAVPacketList();
     if (!pkt1)
         return -1;
     pkt1->pkt = *pkt;
@@ -374,8 +394,7 @@ static void packet_queue_flush(PacketQueue *q)
     SDL_LockMutex(q->mutex);
     for (pkt = q->first_pkt; pkt; pkt = pkt1) {
         pkt1 = pkt->next;
-        av_packet_unref(&pkt->pkt);
-        av_freep(&pkt);
+        delete pkt; // 析构函数负责 unref 节点持有的 AVPacket
     }
     q->last_pkt = NULL;
     q->first_pkt = NULL;
@@ -456,10 +475,11 @@ static int packet_queue_get(PacketQueue *q, AVPacket *pkt, int block, int *seria
             q->nb_packets--;
             q->size -= pkt1->pkt.size + sizeof(*pkt1);
             q->duration -= pkt1->pkt.duration;
-            *pkt = pkt1->pkt;
+            // 引用转移给调用方，节点析构时不再重复释放
+            av_packet_move_ref(pkt, &pkt1->pkt);
             if (serial)
                 *serial = pkt1->serial;
-            av_free(pkt1);
+            delete pkt1;
             ret = 1;
             break;
         }
@@ -483,9 +503,7 @@ static int packet_queue_get(PacketQueue *q, AVPacket *pkt, int block, int *seria
 //解码器初始化（绑定解码结构体、数据包队列、信号量，初始化pts）
 static void decoder_init(Decoder *d, AVCodecContext *avctx, PacketQueue *queue, SDL_cond *empty_queue_cond) {
     av_packet_unref(&d->pkt);
-    av_packet_unref(&d->pkt_temp);
     d->pkt = AVPacket{};
-    d->pkt_temp = AVPacket{};
     d->pkt_serial = 0;
     d->finished = 0;
     d->packet_pending = 0;
@@ -498,99 +516,6 @@ static void decoder_init(Decoder *d, AVCodecContext *avctx, PacketQueue *queue, 
 
 
 static int decoder_reorder_pts = -1;
-#if 0
-//解码一帧数据
-static int decoder_decode_frame(Decoder *d, AVFrame *frame, AVSubtitle *sub) {
-    int got_frame = 0;
-
-    do {
-        int ret = -1;
-
-        if (d->queue->abort_request)
-            return -1;
-
-        if (!d->packet_pending || d->queue->serial != d->pkt_serial) {
-            AVPacket pkt;
-            do {
-                if (d->queue->nb_packets == 0)
-                    SDL_CondSignal(d->empty_queue_cond);
-                //从对应的队列中获取原始数据
-                if (packet_queue_get(d->queue, &pkt, 1, &d->pkt_serial) < 0)
-                    return -1;
-                if (pkt.data == flush_pkt.data) {
-                    avcodec_flush_buffers(d->avctx);
-                    d->finished = 0;
-                    d->next_pts = d->start_pts;
-                    d->next_pts_tb = d->start_pts_tb;
-                }
-            } while (pkt.data == flush_pkt.data || d->queue->serial != d->pkt_serial);
-            av_packet_unref(&d->pkt);
-            d->pkt_temp = d->pkt = pkt;
-            d->packet_pending = 1;
-        }
-
-        switch (d->avctx->codec_type) {
-        case AVMEDIA_TYPE_VIDEO:
-            //解码视频帧
-            ret = avcodec_decode_video2(d->avctx, frame, &got_frame, &d->pkt_temp);
-            if (got_frame) {
-                if (decoder_reorder_pts == -1) {
-                    frame->pts = av_frame_get_best_effort_timestamp(frame);
-                }
-                else if (!decoder_reorder_pts) {
-                    frame->pts = frame->pkt_dts;
-                }
-            }
-            break;
-        case AVMEDIA_TYPE_AUDIO:
-            //解码音频帧
-            ret = avcodec_decode_audio4(d->avctx, frame, &got_frame, &d->pkt_temp);
-            if (got_frame) {
-                //AVRational tb = (AVRational) { 1, frame->sample_rate };
-                AVRational tb = { 1, frame->sample_rate };
-                if (frame->pts != AV_NOPTS_VALUE)
-                    frame->pts = av_rescale_q(frame->pts, av_codec_get_pkt_timebase(d->avctx), tb);
-                else if (d->next_pts != AV_NOPTS_VALUE)
-                    frame->pts = av_rescale_q(d->next_pts, d->next_pts_tb, tb);
-                if (frame->pts != AV_NOPTS_VALUE) {
-                    d->next_pts = frame->pts + frame->nb_samples;
-                    d->next_pts_tb = tb;
-                }
-            }
-            break;
-        case AVMEDIA_TYPE_SUBTITLE:
-            //解码字幕帧
-            ret = avcodec_decode_subtitle2(d->avctx, sub, &got_frame, &d->pkt_temp);
-            break;
-        }
-
-        if (ret < 0) {
-            d->packet_pending = 0;
-        }
-        else {
-            d->pkt_temp.dts =
-                d->pkt_temp.pts = AV_NOPTS_VALUE;
-            if (d->pkt_temp.data) {
-                if (d->avctx->codec_type != AVMEDIA_TYPE_AUDIO)
-                    ret = d->pkt_temp.size;
-                d->pkt_temp.data += ret;
-                d->pkt_temp.size -= ret;
-                if (d->pkt_temp.size <= 0)
-                    d->packet_pending = 0;
-            }
-            else {
-                if (!got_frame) {
-                    d->packet_pending = 0;
-                    d->finished = d->pkt_serial;
-                }
-            }
-        }
-    } while (!got_frame && !d->finished);
-
-    return got_frame;
-}
-#endif
-#if 1
 // for循环的第一步是读取帧，最后一步是把包写入解码器，看久一点才会知道数据是哪里写入哪里读取的。
 static int decoder_decode_frame(Decoder *d, AVFrame *frame, AVSubtitle *sub) {
     int ret = AVERROR(EAGAIN);
@@ -706,7 +631,7 @@ static int decoder_decode_frame(Decoder *d, AVFrame *frame, AVSubtitle *sub) {
         }
     }
 }
-#endif
+
 //解码器销毁
 static void decoder_destroy(Decoder *d) {
     av_packet_unref(&d->pkt);

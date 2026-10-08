@@ -27,6 +27,7 @@ SOURCES += \
     settingsrepository.cpp \
     show.cpp \
     sonic.cpp \
+    subtitleparser.cpp \
     subtitleplugin.cpp \
     title.cpp \
     videoctrl.cpp
@@ -51,6 +52,7 @@ HEADERS += \
     playlist.h \
     playlistmodel.h \
     settingsrepository.h \
+    subtitleparser.h \
     subtitleplugin.h \
     show.h \
     sonic.h \

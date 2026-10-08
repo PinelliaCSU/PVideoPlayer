@@ -516,10 +516,38 @@ Adapters (FFmpegBackend, SDLAudioSink, SDLVideoSink, QSettingsRepository)
 
 验证结果：主工程 Release 构建通过；`MediaLocatorTest` 10/10、`PlaybackServiceTest` 6/6 全部通过。
 
-## 22. 后续仍需完成项
+## 22. 当前轮次：输出资源、包生命周期与媒体能力落地
 
-- `VideoOutputResources` 完整接管窗口、渲染器、纹理和渲染循环（当前窗口/渲染器仍为 `VideoCtrl` 裸成员）；
-- `Decoder::pkt`/`pkt_temp` 与队列节点的 `AVPacket` 生命周期进一步内聚；
-- 硬件解码、滤镜链和字幕插件从接口落地为真实平台实现；
-- 真实媒体播放、seek、网络流、设备失效和高并发队列场景的集成/压力测试；
-- 沿用“兼容适配器 + 小步构建验证”的方式推进，避免一次性替换播放核心。
+本阶段完成文档第 22 节（上一轮遗留）中三项仍然只有“接口/裸成员”的改造。
+
+### 22.1 `VideoOutputResources` 完整接管窗口、渲染器、纹理与渲染原语
+
+- `VideoOutputResources` 现在持有 `SdlWindowPtr`、`SdlRendererPtr`、`SdlTexturePtr`，并提供 `ensureWindow`、`ensureRenderer`、`recreateRenderer`、`destroyRenderer`、`ensureTexture`、`beginFrame`、`presentTexture`、`endFrame`、`setFullScreen`、`reset`；
+- `VideoCtrl` 移除 `m_window`、`m_renderer`、`m_vid_texture` 裸成员与 `realloc_texture()`，渲染路径（`video_open`、`video_display`、`video_image_display`、`do_exit`、空闲重绘、全屏切换）全部通过资源对象完成；
+- 渲染器“真实清屏探测失效后重建”、纹理“尺寸/格式变化才重建”、纹理先于渲染器释放等既有语义保持不变，破坏性顺序由 `destroyRenderer()` 内部保证。
+
+### 22.2 `AVPacket` 生命周期内聚
+
+- `MyAVPacketList` 成为拥有型节点：析构统一 `av_packet_unref`，节点改用 `new (std::nothrow)` / `delete` 管理；
+- `packet_queue_flush()` 不再手工 `unref` + `av_freep`，直接 `delete` 节点；
+- `packet_queue_get()` 使用 `av_packet_move_ref()` 把引用移交给调用方后再 `delete` 节点，避免析构重复释放；生产端仍保留浅拷贝转移，因为 `av_packet_move_ref` 会重置 `flush_pkt` 哨兵而使刷新包判定失效；
+- `Decoder` 增加析构统一 `unref` 待处理包，并删除从未在有效路径使用、仅服务于已废弃实现的 `pkt_temp` 字段；
+- 顺带移除 `datactrl.h` 中整段 `#if 0` 的旧解码实现（约 92 行死代码，且引用了被删除的 `pkt_temp`）。
+
+### 22.3 硬件解码、滤镜链、字幕插件的真实实现
+
+- **硬件解码**：`HardwareDecoderDevice::initializeForDecoder()` 依据 `avcodec_get_hw_config()` 声明的能力协商设备类型与硬件像素格式，`toSoftwareFrame()` 负责把硬解帧转回系统内存；`stream_component_open()` 优先尝试硬件解码，并新增 `get_format` 协商回调与“打开失败即释放上下文重建为软件解码”的回退路径；视频解码线程统一转换为软件帧，渲染路径无需感知硬解。可通过 `PVP_HW_DECODE` 指定设备名或设为 `off/0/none` 禁用。
+- **滤镜链**：`FilterChain` 实现完整的 `buffer → description → buffersink` 视频滤镜图（含 `avfilter_graph_parse_ptr` 端点所有权处理、`push`/`pull`、输出时间基查询）；`video_thread()` 在配置了 `PVP_VIDEO_FILTER` 时惰性构建滤镜图并把滤镜产出的所有帧依次入队，未配置时走与原来完全一致的路径。
+- **字幕插件**：新增 `subtitleparser.h/.cpp`，实现 SRT/WebVTT 时间轴与文本解析；`FileSubtitleProvider` 查找媒体同目录同名 `.srt`/`.vtt` 并解析；`SubtitlePluginRegistry` 构造时自动注册内置 provider，并保留外部 provider 注册入口（不接管所有权）。
+
+### 22.4 验证结果
+
+- 主工程 Qt 6.7.2 MinGW Release 构建通过；
+- 测试扩展到 3 个测试类共 24 项，全部通过：`MediaLocatorTest` 10、`SubtitlePluginTest` 8、`PlaybackServiceTest` 6；
+- 应用启动冒烟测试通过（默认启用硬件解码，以及 `PVP_HW_DECODE=0` 两条路径）。
+
+### 22.5 仍需真实环境验证
+
+- 硬件解码与滤镜链需要真实媒体文件、显卡驱动和多平台设备才能确认输出正确性与性能；
+- 字幕仅完成“提供者 + 解析”，**屏幕字幕渲染（含时间轴驱动与样式）尚未实现**，需要在 `Show` 侧增加渲染与时间同步；
+- 解码队列竞态、快速切换与设备失效场景仍需压力测试。

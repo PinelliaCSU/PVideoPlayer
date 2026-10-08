@@ -91,7 +91,6 @@ private:
     void video_open();
     void video_image_display(VideoState *is);
     void calculate_display_rect(SDL_Rect *rect, int src_x_left, int src_y_top, int src_width, int src_height, int pic_width, int pic_height, AVRational pic_sar);
-    int realloc_texture(SdlTexturePtr &texture, Uint32 new_format, int new_width, int new_height, SDL_BlendMode blend_mode, int init_texture);
     int upload_texture(SDL_Texture *tex, AVFrame *frame, SwsContextPtr &img_convert_ctx);
     int stream_has_enough_packets(AVStream *st, int stream_id, PacketQueue *queue);
 
@@ -116,9 +115,6 @@ private:
     std::thread m_play_loop_thread;
     VideoState* m_cur_stream;
 
-    SDL_Renderer *m_renderer;
-    SDL_Window *m_window;
-
     int m_screen_width;
     int m_screen_height;
 
@@ -134,7 +130,6 @@ private:
     bool m_stop_emitted; //标记是否已经发送过停止信号
     QString m_current_file; // 当前播放文件路径
     bool m_video_open; // 视频窗口打开状态
-    SdlTexturePtr m_vid_texture;       // 视频纹理由 RAII 管理
     AVRational m_frame_sar;            // 当前帧的宽高比
     bool m_frame_flip_v;               // 当前帧是否垂直翻转
     AvFramePtr m_last_frame;             // 最后一帧的引用由 RAII 管理
@@ -143,7 +138,7 @@ private:
     ClockController m_clock_controller;
     AudioExtractionService m_audio_extraction_service;
     AudioOutputDevice m_audio_output;
-    VideoOutputResources m_video_output_resources;
+    VideoOutputResources m_video_output_resources;  // 窗口、渲染器、纹理与渲染原语的所有者
 
     bool m_audio_force_play = true;//音频强制播放一帧，配合step使用
 public:

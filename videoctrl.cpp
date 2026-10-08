@@ -89,6 +89,54 @@ int decode_interrupt_cb(void *ctx) {
     return is->abort_request;
 }
 
+/*
+ * 硬件解码的格式协商回调：仅在设备上下文提供的像素格式出现在解码器候选列表中时使用硬件格式，
+ * 否则回退到第一个（软件）格式，保证硬件不可用时仍能正常解码。
+ */
+static enum AVPixelFormat pick_hardware_pixel_format(AVCodecContext *ctx, const enum AVPixelFormat *pixFmts)
+{
+    const HardwareDecoderDevice *device = static_cast<const HardwareDecoderDevice *>(ctx->opaque);
+    if (device && device->isActive()) {
+        for (const enum AVPixelFormat *pixelFormat = pixFmts; *pixelFormat != AV_PIX_FMT_NONE; ++pixelFormat) {
+            if (*pixelFormat == device->pixelFormat()) {
+                return *pixelFormat;
+            }
+        }
+    }
+    return pixFmts[0];
+}
+
+/*
+ * 解析 PVP_HW_DECODE 环境变量：
+ * - 未设置：启用硬件解码，使用平台默认设备类型；
+ * - off / 0 / none：禁用硬件解码；
+ * - 其他取值：按 FFmpeg 设备名（如 d3d11va、cuda）启用指定设备。
+ * 返回 false 表示禁用硬件解码。
+ */
+static bool resolveHardwareDecodePreference(AVHWDeviceType *preferredType)
+{
+    const char *requested = getenv("PVP_HW_DECODE");
+    if (requested) {
+        if (!strcmp(requested, "0") || !strcmp(requested, "off") || !strcmp(requested, "none")) {
+            return false;
+        }
+        const AVHWDeviceType named = av_hwdevice_find_type_by_name(requested);
+        if (named != AV_HWDEVICE_TYPE_NONE) {
+            *preferredType = named;
+            return true;
+        }
+        av_log_warning("unknown PVP_HW_DECODE value '%s', using platform default device\n", requested);
+    }
+#if defined(_WIN32)
+    *preferredType = AV_HWDEVICE_TYPE_D3D11VA;
+#elif defined(__APPLE__)
+    *preferredType = AV_HWDEVICE_TYPE_VIDEOTOOLBOX;
+#else
+    *preferredType = AV_HWDEVICE_TYPE_VAAPI;
+#endif
+    return true;
+}
+
 int is_realtime(AVFormatContext *s) {
     if (!strcmp(s->iformat->name, "rtp")
         || !strcmp(s->iformat->name, "rtsp")
@@ -108,8 +156,6 @@ VideoCtrl::VideoCtrl(QObject *parent):
     m_init(false),
     m_play_loop(false),
     m_cur_stream(nullptr),
-    m_renderer(nullptr),
-    m_window(nullptr),
     m_screen_width(0),
     m_screen_height(0),
     m_frame_width(0),
@@ -121,7 +167,6 @@ VideoCtrl::VideoCtrl(QObject *parent):
     m_audio_speed_convert(nullptr),
     m_stop_emitted(false),
     m_video_open(false),
-    m_vid_texture(nullptr),
     m_frame_sar({0, 1}),
     m_frame_flip_v(false),
     m_last_frame(nullptr),
@@ -177,22 +222,10 @@ VideoCtrl::~VideoCtrl() {
         m_play_loop_thread.join();
     }
 
-    // 清理视频纹理
-    if (m_vid_texture) {
-        m_vid_texture.reset();
-    }
+    // 清理视频纹理、渲染器和窗口
+    m_video_output_resources.reset();
     // 清理最后一帧引用
     m_last_frame.reset();
-    // 清理渲染器
-    if(m_renderer) {
-        SDL_DestroyRenderer(m_renderer);
-        m_renderer = nullptr;
-    }
-    // 清理窗口
-    if(m_window) {
-        SDL_DestroyWindow(m_window);
-        m_window = nullptr;
-    }
     //清理日志文件
     if (log_file) {
         fclose(log_file);
@@ -294,6 +327,11 @@ VideoState * VideoCtrl::stream_open(const char *filename) {
     is->continue_read_thread = is->owned_continue_read_thread.get();
     if (!is->continue_read_thread)
         goto fail;
+
+    // 可选视频滤镜链，通过环境变量提供（例如 PVP_VIDEO_FILTER=hflip）；未设置时不启用
+    if (const char *filterDescription = getenv("PVP_VIDEO_FILTER")) {
+        is->filter_description = filterDescription;
+    }
 
     init_clock(&is->vidclk, &is->videoq.serial);
     init_clock(&is->audclk, &is->audioq.serial);
@@ -666,6 +704,8 @@ int VideoCtrl::stream_component_open(VideoState *is, int stream_index) {
     int sample_rate, nb_channels;
     int64_t channel_layout;
     int ret = 0;
+    bool hardwareEnabled = false;
+    AVHWDeviceType hardwareDeviceType = AV_HWDEVICE_TYPE_NONE;
     if (stream_index < 0 || stream_index >= ic->nb_streams)
         return -1;
     avctx = avcodec_alloc_context3(nullptr);
@@ -692,7 +732,37 @@ int VideoCtrl::stream_component_open(VideoState *is, int stream_index) {
     if (avctx->codec_type == AVMEDIA_TYPE_VIDEO || avctx->codec_type == AVMEDIA_TYPE_AUDIO)
         av_dict_set(&opts, "refcounted_frames", "1", 0);
 
-    if ((ret = avcodec_open2(avctx, codec, &opts)) < 0)
+    /*
+     * 视频流优先尝试硬件解码：先按解码器声明的硬件能力创建设备上下文，
+     * 设备或解码器不可用时自动回退到软件解码，保证行为与原来一致。
+     */
+    if (avctx->codec_type == AVMEDIA_TYPE_VIDEO && codec
+        && resolveHardwareDecodePreference(&hardwareDeviceType)) {
+        hardwareEnabled = is->hw_device.initializeForDecoder(codec, hardwareDeviceType);
+        if (hardwareEnabled) {
+            avctx->hw_device_ctx = av_buffer_ref(is->hw_device.context());
+            avctx->opaque = &is->hw_device;
+            avctx->get_format = pick_hardware_pixel_format;
+        }
+    }
+    ret = avcodec_open2(avctx, codec, &opts);
+    if (ret < 0 && hardwareEnabled) {
+        av_log_warning("hardware decoder open failed, falling back to software decoding\n");
+        hardwareEnabled = false;
+        is->hw_device.reset();
+        // avcodec_open2 失败后上下文不可复用，必须释放并重新构建
+        avcodec_free_context(&avctx);
+        avctx = avcodec_alloc_context3(nullptr);
+        if (!avctx) {
+            ret = AVERROR(ENOMEM);
+            goto fail;
+        }
+        if ((ret = avcodec_parameters_to_context(avctx, ic->streams[stream_index]->codecpar)) < 0)
+            goto fail;
+        av_codec_set_pkt_timebase(avctx, ic->streams[stream_index]->time_base);
+        ret = avcodec_open2(avctx, codec, &opts);
+    }
+    if (ret < 0)
         goto fail;
     // 判断是否有未识别的参数
     if ((t = av_dict_get(opts, "", NULL, AV_DICT_IGNORE_SUFFIX))) {
@@ -702,8 +772,7 @@ int VideoCtrl::stream_component_open(VideoState *is, int stream_index) {
     }
 
     // 标记现在文件内容都是可读的【防止刚刚文件读取到末尾了之后 eof 被设置为 1 了，当然这个刚刚不一定是刚刚写的代码，而是不知道哪个地方的刚刚】
-    is->eof = 0;
-    /*
+    is->eof = 0;    /*
      * mark：就在刚刚我们可以看到所有流都被执行了 st->discard = AVDISCARD_ALL; 即被标记为丢弃了。而我们在这里决定了我们要使用这个流，所以我们需要恢复这个流，所以要将标记改回来。
      */
     ic->streams[stream_index]->discard = AVDISCARD_DEFAULT;
@@ -1345,14 +1414,18 @@ the_end:
 int VideoCtrl::video_thread(void *arg) {
     VideoState *is = (VideoState *) arg;
     AVFrame *frame = av_frame_alloc();
+    AVFrame *filteredFrame = av_frame_alloc();
     double pts;
     double duration;
     int ret;
     // tb 是 pts 的时间基，例如 1/90000, frame_rate 是视频帧率的时间基，例如 1/25
     AVRational tb = is->video_st->time_base;
     AVRational frame_rate = av_guess_frame_rate(is->ic, is->video_st, NULL);
-    if (!frame)
+    if (!frame || !filteredFrame) {
+        av_frame_free(&frame);
+        av_frame_free(&filteredFrame);
         return AVERROR(ENOMEM);
+    }
 
     while (true) {
 
@@ -1362,6 +1435,38 @@ int VideoCtrl::video_thread(void *arg) {
             goto out;
         if (!ret)
             continue;
+
+        /*
+         * 可选滤镜链：仅在配置了滤镜描述时启用（默认关闭，走与原来完全一致的路径）。
+         * 滤镜图按首个解码帧的格式惰性构建，一次 push 后把滤镜产出的所有帧依次入队。
+         */
+        if (!is->filter_description.empty()) {
+            if (!is->video_filter.isActive()
+                && !is->video_filter.create(is->filter_description.c_str(), frame, tb)) {
+                av_log_error("video filter chain unavailable, disabling it\n");
+                is->filter_description.clear();
+            }
+        }
+
+        if (is->video_filter.isActive()) {
+            const AVRational filterTimeBase = is->video_filter.outputTimeBase();
+            if (is->video_filter.push(frame) < 0) {
+                av_log_error("cannot push frame into video filter chain\n");
+                goto out;
+            }
+            av_frame_unref(frame);
+            while ((ret = is->video_filter.pull(filteredFrame)) >= 0) {
+                duration = (frame_rate.num && frame_rate.den ? av_q2d({frame_rate.den, frame_rate.num}) : 0.0);
+                pts = (filteredFrame->pts == AV_NOPTS_VALUE) ? NAN : filteredFrame->pts * av_q2d(filterTimeBase);
+                ret = queue_picture(is, filteredFrame, pts, duration,
+                                    av_frame_get_pkt_pos(filteredFrame), is->viddec.pkt_serial);
+                av_frame_unref(filteredFrame);
+                if (ret < 0)
+                    goto out;
+            }
+            continue;
+        }
+
         // 正常来说应该有帧率的，即 1/25，那么得到的 duration 就是 40 ms，但是如果没有，那么我们只能标记为0代表有问题
         duration = (frame_rate.num && frame_rate.den ? av_q2d({frame_rate.den, frame_rate.num}) : 0.0);
         // 这个 pts 是计算真实时间播放的时长，单位秒
@@ -1377,6 +1482,7 @@ int VideoCtrl::video_thread(void *arg) {
     }
 out:
     av_frame_free(&frame);
+    av_frame_free(&filteredFrame);
 
     return 0;
 }
@@ -1385,6 +1491,23 @@ int VideoCtrl::get_video_frame(VideoState *is, AVFrame *frame) {
     int got_picture;
     if ( (got_picture = decoder_decode_frame(&is->viddec, frame, NULL)) < 0)
         return -1;
+
+    /*
+     * 硬件解码输出的帧只在显存中，后续队列和 SDL 纹理上传都按软件帧处理，
+     * 因此在这里统一转换为软件帧，使渲染路径无需感知硬件解码。
+     */
+    if (got_picture && is->hw_device.isActive() && frame->format == is->hw_device.pixelFormat()) {
+        AVFrame *softwareFrame = av_frame_alloc();
+        if (!softwareFrame || !is->hw_device.toSoftwareFrame(frame, softwareFrame)) {
+            av_log_error("cannot transfer hardware frame to system memory\n");
+            av_frame_free(&softwareFrame);
+            av_frame_unref(frame);
+            return -1;
+        }
+        av_frame_unref(frame);
+        av_frame_move_ref(frame, softwareFrame);
+        av_frame_free(&softwareFrame);
+    }
 
     if (got_picture) {
         // 现实的时间播放时长
@@ -1437,48 +1560,20 @@ void VideoCtrl::do_exit(VideoState *is) {
         m_cur_stream = nullptr;
     }
 
-    // 销毁旧纹理（渲染器销毁后它也会失效）
-    if (m_vid_texture) {
-        m_vid_texture.reset();
-    }
     // 重新创建渲染器和纹理--因为渲染器一定会失效，所以我们直接创建一个新的
-    if (m_window) {
-        SDL_RendererInfo info;
-        /*
-         * 当调用 SDL_AudioClose 后，渲染器可能会失效【这就很扯，SDL_AudioClose 为什么要影响渲染器呢】
-         * mark: 强制销毁一次hhhh
-         */
-        if (m_renderer) {
-            SDL_DestroyRenderer(m_renderer);
-            m_renderer = nullptr;
-        }
-        m_renderer = SDL_CreateRenderer(m_window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-        // 如果创建失败，那么就创建一个普通的渲染器
-        if (!m_renderer) {
-            m_renderer = SDL_CreateRenderer(m_window, -1, 0);
-        }
-        if (m_renderer) {
-            m_video_output_resources.attachRenderer(m_renderer);
-            // 可以发现会从 direct3d 变成了 opengl
-            if (!SDL_GetRendererInfo(m_renderer, &info))
-                av_log_info("Initialized %s renderer.\n", info.name);
-
+    if (m_video_output_resources.window()) {
+        if (m_video_output_resources.recreateRenderer()) {
             // 用 m_last_frame 重新创建纹理（av_frame_ref 保证了帧数据在 stream_close 后仍然有效）
             // 用户主动停止时不保留最后一帧，清空画面
             if (!m_user_stop && m_last_frame && m_last_frame->width > 0 && m_last_frame->height > 0) {
                 av_log_info("do_exit: recreating texture from m_last_frame, size=%d x %d, format=%d\n",
                             m_last_frame->width, m_last_frame->height, m_last_frame->format);
                 int sdlPixFmt = m_last_frame->format == AV_PIX_FMT_YUV420P ? SDL_PIXELFORMAT_YV12 : SDL_PIXELFORMAT_ARGB8888;
-                m_video_output_resources.attachRenderer(m_renderer);
-                m_vid_texture.reset(SDL_CreateTexture(m_renderer, sdlPixFmt,
-                                                  SDL_TEXTUREACCESS_STREAMING, m_last_frame->width, m_last_frame->height));
-                if (m_vid_texture) {
+                if (m_video_output_resources.ensureTexture(sdlPixFmt, m_last_frame->width, m_last_frame->height,
+                                                          SDL_BLENDMODE_NONE)) {
                     SwsContextPtr sws_ctx;
-                    upload_texture(m_vid_texture.get(), m_last_frame.get(), sws_ctx);
-                    SDL_SetTextureBlendMode(m_vid_texture.get(), SDL_BLENDMODE_NONE);
+                    upload_texture(m_video_output_resources.texture(), m_last_frame.get(), sws_ctx);
                     av_log_info("do_exit: texture recreated successfully\n");
-                } else {
-                    av_log_error("do_exit: SDL_CreateTexture failed: %s\n", SDL_GetError());
                 }
             } else if (m_user_stop) {
                 // 用户主动停止：清空画面，释放最后一帧引用
@@ -1487,9 +1582,8 @@ void VideoCtrl::do_exit(VideoState *is) {
                 m_frame_width = 0;
                 m_frame_height = 0;
                 // 清空渲染器为黑色
-                SDL_SetRenderDrawColor(m_renderer, 0, 0, 0, 255);
-                SDL_RenderClear(m_renderer);
-                SDL_RenderPresent(m_renderer);
+                m_video_output_resources.beginFrame();
+                m_video_output_resources.endFrame();
             } else {
                 av_log_info("do_exit: no m_last_frame to recreate texture, m_last_frame=%p\n", (void*)m_last_frame.get());
             }
@@ -1563,6 +1657,8 @@ void VideoCtrl::stream_component_close(VideoState *is, int stream_index) {
     case AVMEDIA_TYPE_VIDEO:
         decoder_abort(&is->viddec, &is->pictq);
         decoder_destroy(&is->viddec);
+        // 解码器上下文释放后再释放硬件设备，避免 avctx->opaque 悬空
+        is->hw_device.reset();
         break;
     default:
         break;
@@ -1658,17 +1754,15 @@ void VideoCtrl::loop_thread(VideoState *curStream) {
                 m_screen_height = event.window.data2;
                 // fall through，resize 和 exposed 都需要重绘
             case SDL_WINDOWEVENT_EXPOSED:
-                if (m_window && m_renderer && g_show_rect_mutex.tryLock()) {
-                    SDL_SetRenderDrawColor(m_renderer, 0, 0, 0, 255);
-                    SDL_RenderClear(m_renderer);
-                    if (m_vid_texture && m_frame_width > 0 && m_frame_height > 0) {
+                if (m_video_output_resources.isReady() && g_show_rect_mutex.tryLock()) {
+                    m_video_output_resources.beginFrame();
+                    if (m_video_output_resources.texture() && m_frame_width > 0 && m_frame_height > 0) {
                         SDL_Rect rect;
                         calculate_display_rect(&rect, 0, 0, m_screen_width, m_screen_height,
                                                m_frame_width, m_frame_height, m_frame_sar);
-                        SDL_RenderCopyEx(m_renderer, m_vid_texture.get(), NULL, &rect, 0, NULL,
-                                         (SDL_RendererFlip)(m_frame_flip_v ? SDL_FLIP_VERTICAL : 0));
+                        m_video_output_resources.presentTexture(rect, m_frame_flip_v);
                     }
-                    SDL_RenderPresent(m_renderer);
+                    m_video_output_resources.endFrame();
                     g_show_rect_mutex.unlock();
                 }
                 break;
@@ -1920,12 +2014,11 @@ void VideoCtrl::video_display(VideoState *is) {
     */
     if (!m_video_open)
         video_open();
-    if (m_renderer) {
+    if (m_video_output_resources.renderer()) {
         if (g_show_rect_mutex.tryLock()) {
-            SDL_SetRenderDrawColor(m_renderer, 0, 0, 0, 255);
-            SDL_RenderClear(m_renderer);
+            m_video_output_resources.beginFrame();
             video_image_display(is);
-            SDL_RenderPresent(m_renderer);
+            m_video_output_resources.endFrame();
             g_show_rect_mutex.unlock();
         }
     } else {
@@ -1938,50 +2031,17 @@ void VideoCtrl::video_open() {
     w = m_screen_width;
     h = m_screen_height;
     qDebug() << "VideoCtrl::video_open - m_play_wid:" << m_play_wid << "screen size:" << w << "x" << h;
-    if (!m_window) {
-        int flags = SDL_WINDOW_SHOWN;
-        flags |= SDL_WINDOW_RESIZABLE;
-        m_window = SDL_CreateWindowFrom((void *)m_play_wid);
-        qDebug() << "VideoCtrl::video_open - m_window created:" << m_window;
-        SDL_GetWindowSize(m_window, &w, &h);//初始宽高设置为显示控件宽高
-        SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
-    } else {
-        SDL_SetWindowSize(m_window, w, h);
-    }
 
-    if (m_window) {
-        SDL_RendererInfo info;
-        /*
-         * 当调用 SDL_AudioClose 后，渲染器可能会失效【这就很扯，SDL_AudioClose 为什么要影响渲染器呢】
-         * mark: 复用窗口时，检测旧渲染器是否可用
-         * 用 SDL_RenderClear 做真实检测（探针 CreateTexture 不可靠，D3D 设备丢失只有真正渲染时才暴露）
-         */
-        if (m_renderer) {
-            SDL_SetRenderDrawColor(m_renderer, 0, 0, 0, 255);
-            int clearRet = SDL_RenderClear(m_renderer);
-            if (clearRet < 0) {
-                av_log_error("SDL_RenderClear error: %s\n", SDL_GetError());
-                SDL_DestroyRenderer(m_renderer);
-                m_renderer = nullptr;
-            }
-        }
-        if (!m_renderer) {
-            m_renderer = SDL_CreateRenderer(m_window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-            // 如果创建失败，那么就创建一个普通的渲染器
-            if (!m_renderer) {
-                m_renderer = SDL_CreateRenderer(m_window, -1, 0);
-            }
-        }
-        if (m_renderer) {
-            // 可以发现会从 direct3d 变成了 opengl
-            if (!SDL_GetRendererInfo(m_renderer, &info))
-                av_log_info("Initialized %s renderer.\n", info.name);
-        }
-    }
-
-    if (!m_window || !m_renderer) {
-        av_log_error("SDL create window or render error");
+    if (!m_video_output_resources.ensureWindow((void *)m_play_wid, &w, &h)) {
+        av_log_error("SDL create window error");
         do_exit(m_cur_stream);
+        return;
+    }
+
+    if (!m_video_output_resources.ensureRenderer()) {
+        av_log_error("SDL create render error");
+        do_exit(m_cur_stream);
+        return;
     }
 
     m_cur_stream->width = w;
@@ -2005,11 +2065,11 @@ void VideoCtrl::video_image_display(VideoState *is) {
 
     if (!vp->uploaded) {
         int sdlPixFmt = vp->frame->format == AV_PIX_FMT_YUV420P ? SDL_PIXELFORMAT_YV12 : SDL_PIXELFORMAT_ARGB8888;
-        // 创建纹理（纹理由 VideoCtrl 统一管理，不存储在 VideoState 中）
-        if (realloc_texture(m_vid_texture, sdlPixFmt, vp->frame->width, vp->frame->height, SDL_BLENDMODE_NONE, 0) < 0)
+        // 创建纹理（纹理由 VideoOutputResources 统一管理）
+        if (!m_video_output_resources.ensureTexture(sdlPixFmt, vp->frame->width, vp->frame->height, SDL_BLENDMODE_NONE))
             return;
         // 更新纹理内容
-        if (upload_texture(m_vid_texture.get(), vp->frame, is->owned_img_convert_ctx) < 0)
+        if (upload_texture(m_video_output_resources.texture(), vp->frame, is->owned_img_convert_ctx) < 0)
             return;
         vp->uploaded = 1;
         vp->flip_v = vp->frame->linesize[0] < 0;
@@ -2032,7 +2092,7 @@ void VideoCtrl::video_image_display(VideoState *is) {
         }
     }
     /*mark：无论你图片有多大，我 rect 设置了多大，最后图片显示就是多大，即最后 SDL_RenderCopyEx 会帮我们做等比例缩放处理 */
-    SDL_RenderCopyEx(m_renderer, m_vid_texture.get(), NULL, &rect, 0, NULL, (SDL_RendererFlip)(vp->flip_v ? SDL_FLIP_VERTICAL : 0));
+    m_video_output_resources.presentTexture(rect, vp->flip_v);
 }
 
 void VideoCtrl::calculate_display_rect(SDL_Rect *rect, int src_x_left, int src_y_top, int src_width, int src_height,
@@ -2062,28 +2122,6 @@ void VideoCtrl::calculate_display_rect(SDL_Rect *rect, int src_x_left, int src_y
     rect->y = src_y_top + y;
     rect->w = FFMAX(width, 1);
     rect->h = FFMAX(height, 1);
-}
-
-int VideoCtrl::realloc_texture(SdlTexturePtr &texture, Uint32 new_format, int new_width, int new_height,
-                              SDL_BlendMode blend_mode, int init_texture) {
-    Uint32 format;
-    int access, w, h;
-    if (!texture || SDL_QueryTexture(texture.get(), &format, &access, &w, &h) < 0 || new_width != w || new_height != h || new_format != format) {
-        void *pixels;
-        int pitch;
-        texture.reset(SDL_CreateTexture(m_renderer, new_format, SDL_TEXTUREACCESS_STREAMING, new_width, new_height));
-        if (!texture)
-            return -1;
-        if (SDL_SetTextureBlendMode(texture.get(), blend_mode) < 0)
-            return -1;
-        if (init_texture) {
-            if (SDL_LockTexture(texture.get(), NULL, &pixels, &pitch) < 0)
-                return -1;
-            memset(pixels, 0, pitch * new_height);
-            SDL_UnlockTexture(texture.get());
-        }
-    }
-    return 0;
 }
 
 int VideoCtrl::upload_texture(SDL_Texture *tex, AVFrame *frame, SwsContextPtr &img_convert_ctx) {
@@ -2476,7 +2514,7 @@ the_end:
 void VideoCtrl::toggle_full_screen() {
     av_log_info("full screen state changed, from:'%s' to '%s'\n", m_is_full_screen ? "full" : "not full", !m_is_full_screen ? "full" : "not full");
     m_is_full_screen = !m_is_full_screen;
-    SDL_SetWindowFullscreen(m_window, m_is_full_screen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+    m_video_output_resources.setFullScreen(m_is_full_screen);
     // 设置全屏后，需要刷新画面来同步大小改变事件
     m_cur_stream->force_refresh = 1;
 }
