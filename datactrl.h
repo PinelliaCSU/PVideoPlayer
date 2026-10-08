@@ -4,6 +4,7 @@
 #define __STDC_CONSTANT_MACROS
 #include <thread>
 #include "media_raii.h"
+#include "mediacomponents.h"
 
 extern "C"{
 #include <libavcodec/avcodec.h>
@@ -90,6 +91,8 @@ typedef struct PacketQueue {
     int serial;
     SDL_mutex *mutex;
     SDL_cond *cond;
+    SdlMutexPtr owned_mutex;
+    SdlCondPtr owned_cond;
 } PacketQueue;
 
 #define VIDEO_PICTURE_QUEUE_SIZE 3
@@ -147,6 +150,8 @@ typedef struct FrameQueue {
     SDL_mutex *mutex;
     SDL_cond *cond;
     PacketQueue *pktq;
+    SdlMutexPtr owned_mutex;
+    SdlCondPtr owned_cond;
 } FrameQueue;
 
 enum {
@@ -162,6 +167,7 @@ typedef struct Decoder {
     PacketQueue *queue;
     AVCodecContext *avctx;
     AvCodecContextPtr owned_avctx;
+    DecoderComponent component;
     int pkt_serial;
     int finished;
     int packet_pending;
@@ -189,6 +195,7 @@ typedef struct VideoState {
     int read_pause_return;
     AVFormatContext *ic;
     AvFormatContextPtr owned_ic;
+    DemuxReader demux_reader;
     int realtime;
 
     Clock audclk;
@@ -265,6 +272,7 @@ typedef struct VideoState {
     int last_video_stream, last_audio_stream, last_subtitle_stream;
 
     SDL_cond *continue_read_thread;
+    SdlCondPtr owned_continue_read_thread;
 } VideoState;
 
 
@@ -300,7 +308,7 @@ static int packet_queue_put_private(PacketQueue *q, AVPacket *pkt)
     q->size += pkt1->pkt.size + sizeof(*pkt1);
     q->duration += pkt1->pkt.duration;
     /* XXX: should duplicate packet data in DV case */
-    SDL_CondSignal(q->cond);
+    SDL_CondBroadcast(q->cond);
     return 0;
 }
 
@@ -334,15 +342,24 @@ static int packet_queue_put_nullpacket(PacketQueue *q, int stream_index)
 //数据包队列初始化
 static int packet_queue_init(PacketQueue *q)
 {
-    memset(q, 0, sizeof(PacketQueue));
-    q->mutex = SDL_CreateMutex();
+    q->first_pkt = nullptr;
+    q->last_pkt = nullptr;
+    q->nb_packets = 0;
+    q->size = 0;
+    q->duration = 0;
+    q->serial = 0;
+    q->owned_mutex.reset(SDL_CreateMutex());
+    q->mutex = q->owned_mutex.get();
     if (!q->mutex) {
         av_log(NULL, AV_LOG_FATAL, "SDL_CreateMutex(): %s\n", SDL_GetError());
         return AVERROR(ENOMEM);
     }
-    q->cond = SDL_CreateCond();
+    q->owned_cond.reset(SDL_CreateCond());
+    q->cond = q->owned_cond.get();
     if (!q->cond) {
         av_log(NULL, AV_LOG_FATAL, "SDL_CreateCond(): %s\n", SDL_GetError());
+        q->owned_mutex.reset();
+        q->mutex = nullptr;
         return AVERROR(ENOMEM);
     }
     q->abort_request = 1;
@@ -370,8 +387,10 @@ static void packet_queue_flush(PacketQueue *q)
 static void packet_queue_destroy(PacketQueue *q)
 {
     packet_queue_flush(q);
-    SDL_DestroyMutex(q->mutex);
-    SDL_DestroyCond(q->cond);
+    q->owned_cond.reset();
+    q->owned_mutex.reset();
+    q->cond = nullptr;
+    q->mutex = nullptr;
 }
 //数据包队列停用
 static void packet_queue_abort(PacketQueue *q)
@@ -395,6 +414,22 @@ static void packet_queue_start(PacketQueue *q)
     q->abort_request = 0;
     packet_queue_put_private(q, &flush_pkt);
     SDL_UnlockMutex(q->mutex);
+}
+
+static int packet_queue_packet_count(PacketQueue *q)
+{
+    SDL_LockMutex(q->mutex);
+    const int count = q->nb_packets;
+    SDL_UnlockMutex(q->mutex);
+    return count;
+}
+
+static int packet_queue_serial(PacketQueue *q)
+{
+    SDL_LockMutex(q->mutex);
+    const int serial = q->serial;
+    SDL_UnlockMutex(q->mutex);
+    return serial;
 }
 
 /* return < 0 if aborted, 0 if no packet and > 0 if packet.  */
@@ -454,6 +489,7 @@ static void decoder_init(Decoder *d, AVCodecContext *avctx, PacketQueue *queue, 
     d->finished = 0;
     d->packet_pending = 0;
     d->avctx = avctx;
+    d->component.attach(avctx);
     d->queue = queue;
     d->empty_queue_cond = empty_queue_cond;
     d->start_pts = AV_NOPTS_VALUE;
@@ -561,14 +597,14 @@ static int decoder_decode_frame(Decoder *d, AVFrame *frame, AVSubtitle *sub) {
     for (;;) {
         AVPacket pkt;
         // 1. 流连续情况下获取解码后的帧
-        if (d->queue->serial == d->pkt_serial) { // 1.1 先判断是否是同一播放序列的数据
+        if (packet_queue_serial(d->queue) == d->pkt_serial) { // 1.1 先判断是否是同一播放序列的数据
             do {
                 if (d->queue->abort_request)
                     return -1;  // 是否请求退出
                 // 1.2. 获取解码帧
                 switch (d->avctx->codec_type) {
                 case AVMEDIA_TYPE_VIDEO:
-                    ret = avcodec_receive_frame(d->avctx, frame);
+                    ret = d->component.receive(frame);
                     //printf("frame pts:%ld, dts:%ld\n", frame->pts, frame->pkt_dts);
                     if (ret >= 0) {
                         if (decoder_reorder_pts == -1) {
@@ -579,7 +615,7 @@ static int decoder_decode_frame(Decoder *d, AVFrame *frame, AVSubtitle *sub) {
                     }
                     break;
                 case AVMEDIA_TYPE_AUDIO:
-                    ret = avcodec_receive_frame(d->avctx, frame);
+                    ret = d->component.receive(frame);
                     if (ret >= 0) {
                         AVRational tb = {1, frame->sample_rate};    //
                         if (frame->pts != AV_NOPTS_VALUE) {
@@ -607,7 +643,7 @@ static int decoder_decode_frame(Decoder *d, AVFrame *frame, AVSubtitle *sub) {
                 if (ret == AVERROR_EOF) {
                     d->finished = d->pkt_serial;
                     printf("avcodec_flush_buffers %s(%d)\n", __FUNCTION__, __LINE__);
-                    avcodec_flush_buffers(d->avctx);
+                    d->component.flush();
                     return 0;
                 }
                 // 1.4. 正常解码返回1
@@ -619,7 +655,7 @@ static int decoder_decode_frame(Decoder *d, AVFrame *frame, AVSubtitle *sub) {
         // 2 获取一个packet，如果播放序列不一致(数据不连续)则过滤掉“过时”的packet
         do {
             // 2.1 如果没有数据可读则唤醒read_thread, 实际是continue_read_thread SDL_cond
-            if (d->queue->nb_packets == 0)  // 没有数据可读
+            if (packet_queue_packet_count(d->queue) == 0)  // 没有数据可读
                 SDL_CondSignal(d->empty_queue_cond);// 通知read_thread放入packet
             // 2.2 如果还有pending的packet则使用它
             if (d->packet_pending) {
@@ -630,18 +666,18 @@ static int decoder_decode_frame(Decoder *d, AVFrame *frame, AVSubtitle *sub) {
                 if (packet_queue_get(d->queue, &pkt, 1, &d->pkt_serial) < 0)
                     return -1;
             }
-            if(d->queue->serial != d->pkt_serial) {
+            if(packet_queue_serial(d->queue) != d->pkt_serial) {
                 // darren自己的代码
                 printf("%s(%d) discontinue:queue->serial:%d,pkt_serial:%d\n",
                        __FUNCTION__, __LINE__, d->queue->serial, d->pkt_serial);
                 av_packet_unref(&pkt); // fixed me? 释放要过滤的packet
             }
-        } while (d->queue->serial != d->pkt_serial);// 如果不是同一播放序列(流不连续)则继续读取
+        } while (packet_queue_serial(d->queue) != d->pkt_serial);// 如果不是同一播放序列(流不连续)则继续读取
 
         // 3 将packet送入解码器
         if (pkt.data == flush_pkt.data) {//
             // when seeking or when switching to a different stream
-            avcodec_flush_buffers(d->avctx); //清空里面的缓存帧
+            d->component.flush(); //清空里面的缓存帧
             d->finished = 0;        // 重置为0
             d->next_pts = d->start_pts;     // 主要用在了audio
             d->next_pts_tb = d->start_pts_tb;// 主要用在了audio
@@ -659,7 +695,7 @@ static int decoder_decode_frame(Decoder *d, AVFrame *frame, AVSubtitle *sub) {
                     ret = got_frame ? 0 : (pkt.data ? AVERROR(EAGAIN) : AVERROR_EOF);
                 }
             } else {
-                if (avcodec_send_packet(d->avctx, &pkt) == AVERROR(EAGAIN)) {
+                if (d->component.send(&pkt) == AVERROR(EAGAIN)) {
                     av_log(d->avctx, AV_LOG_ERROR, "Receive_frame and send_packet both returned EAGAIN, which is an API violation.\n");
                     d->packet_pending = 1;
                     av_packet_move_ref(&d->pkt, &pkt);
@@ -673,35 +709,51 @@ static int decoder_decode_frame(Decoder *d, AVFrame *frame, AVSubtitle *sub) {
 //解码器销毁
 static void decoder_destroy(Decoder *d) {
     av_packet_unref(&d->pkt);
+    d->component.detach();
     d->owned_avctx.reset();
     d->avctx = nullptr;
 }
 
 static void frame_queue_unref_item(Frame *vp)
 {
-    av_frame_unref(vp->frame);
+    if (vp->frame)
+        av_frame_unref(vp->frame);
     avsubtitle_free(&vp->sub);
 }
+static void frame_queue_destory(FrameQueue *f);
 //帧队列初始化（绑定数据包队列，初始化最大值）
 static int frame_queue_init(FrameQueue *f, PacketQueue *pktq, int max_size, int keep_last)
 {
     int i;
-    memset(f, 0, sizeof(FrameQueue));
-    if (!(f->mutex = SDL_CreateMutex())) {
+    f->rindex = 0;
+    f->windex = 0;
+    f->size = 0;
+    f->rindex_shown = 0;
+    f->pktq = pktq;
+    for (i = 0; i < FRAME_QUEUE_SIZE; ++i)
+        f->queue[i].frame = nullptr;
+    f->owned_mutex.reset(SDL_CreateMutex());
+    f->mutex = f->owned_mutex.get();
+    if (!f->mutex) {
         av_log(NULL, AV_LOG_FATAL, "SDL_CreateMutex(): %s\n", SDL_GetError());
         return AVERROR(ENOMEM);
     }
-    if (!(f->cond = SDL_CreateCond())) {
+    f->owned_cond.reset(SDL_CreateCond());
+    f->cond = f->owned_cond.get();
+    if (!f->cond) {
         av_log(NULL, AV_LOG_FATAL, "SDL_CreateCond(): %s\n", SDL_GetError());
+        f->owned_mutex.reset();
+        f->mutex = nullptr;
         return AVERROR(ENOMEM);
     }
-    f->pktq = pktq;
     f->max_size = FFMIN(max_size, FRAME_QUEUE_SIZE);
     f->keep_last = !!keep_last;
     //为队列中所有的缓存帧预先申请内存
     for (i = 0; i < f->max_size; i++)
-        if (!(f->queue[i].frame = av_frame_alloc()))
+        if (!(f->queue[i].frame = av_frame_alloc())) {
+            frame_queue_destory(f);
             return AVERROR(ENOMEM);
+        }
     return 0;
 }
 //帧队列销毁
@@ -713,14 +765,16 @@ static void frame_queue_destory(FrameQueue *f)
         frame_queue_unref_item(vp);
         av_frame_free(&vp->frame);
     }
-    SDL_DestroyMutex(f->mutex);
-    SDL_DestroyCond(f->cond);
+    f->owned_cond.reset();
+    f->owned_mutex.reset();
+    f->cond = nullptr;
+    f->mutex = nullptr;
 }
 //帧队列信号
 static void frame_queue_signal(FrameQueue *f)
 {
     SDL_LockMutex(f->mutex);
-    SDL_CondSignal(f->cond);
+    SDL_CondBroadcast(f->cond);
     SDL_UnlockMutex(f->mutex);
 }
 
@@ -773,9 +827,9 @@ static Frame *frame_queue_peek_readable(FrameQueue *f)
 
 static void frame_queue_push(FrameQueue *f)
 {
+    SDL_LockMutex(f->mutex);
     if (++f->windex == f->max_size)
         f->windex = 0;
-    SDL_LockMutex(f->mutex);
     f->size++;
     SDL_CondSignal(f->cond);
     SDL_UnlockMutex(f->mutex);
@@ -788,9 +842,9 @@ static void frame_queue_next(FrameQueue *f)
         return;
     }
     frame_queue_unref_item(&f->queue[f->rindex]);
+    SDL_LockMutex(f->mutex);
     if (++f->rindex == f->max_size)
         f->rindex = 0;
-    SDL_LockMutex(f->mutex);
     f->size--;
     SDL_CondSignal(f->cond);
     SDL_UnlockMutex(f->mutex);
@@ -816,7 +870,8 @@ static void decoder_abort(Decoder *d, FrameQueue *fq)
 {
     packet_queue_abort(d->queue);
     frame_queue_signal(fq);
-    d->decode_thread.join();
+    if (d->decode_thread.joinable())
+        d->decode_thread.join();
     packet_queue_flush(d->queue);
 }
 

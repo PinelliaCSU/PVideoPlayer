@@ -6,9 +6,22 @@ extern "C" {
 
 bool DemuxReader::open(const char *locator)
 {
+    return open(locator, nullptr, nullptr);
+}
+
+bool DemuxReader::open(const char *locator, InterruptCallback callback, void *opaque)
+{
     close();
+    AVFormatContext *allocated = avformat_alloc_context();
+    if (!allocated) {
+        return false;
+    }
+    allocated->interrupt_callback.callback = callback;
+    allocated->interrupt_callback.opaque = opaque;
     AVFormatContext *context = nullptr;
+    context = allocated;
     if (avformat_open_input(&context, locator, nullptr, nullptr) < 0) {
+        avformat_free_context(allocated);
         return false;
     }
     if (avformat_find_stream_info(context, nullptr) < 0) {
@@ -70,14 +83,27 @@ bool DecoderComponent::open(const AVCodecParameters *parameters, AVRational pack
     return true;
 }
 
+void DecoderComponent::attach(AVCodecContext *context)
+{
+    close();
+    m_attached_context = context;
+}
+
+void DecoderComponent::detach()
+{
+    m_attached_context = nullptr;
+}
+
 int DecoderComponent::send(const AVPacket *packet)
 {
-    return m_context ? avcodec_send_packet(m_context.get(), packet) : AVERROR(EINVAL);
+    AVCodecContext *context = m_attached_context ? m_attached_context : m_context.get();
+    return context ? avcodec_send_packet(context, packet) : AVERROR(EINVAL);
 }
 
 int DecoderComponent::receive(AVFrame *frame)
 {
-    return m_context ? avcodec_receive_frame(m_context.get(), frame) : AVERROR(EINVAL);
+    AVCodecContext *context = m_attached_context ? m_attached_context : m_context.get();
+    return context ? avcodec_receive_frame(context, frame) : AVERROR(EINVAL);
 }
 
 AVCodecContext *DecoderComponent::context() const
@@ -87,10 +113,17 @@ AVCodecContext *DecoderComponent::context() const
 
 void DecoderComponent::close()
 {
-    if (m_context) {
-        avcodec_flush_buffers(m_context.get());
-    }
+    flush();
+    m_attached_context = nullptr;
     m_context.reset();
+}
+
+void DecoderComponent::flush()
+{
+    AVCodecContext *context = m_attached_context ? m_attached_context : m_context.get();
+    if (context) {
+        avcodec_flush_buffers(context);
+    }
 }
 
 bool HardwareDecoderDevice::initialize(AVHWDeviceType type)

@@ -446,3 +446,35 @@ Adapters (FFmpegBackend, SDLAudioSink, SDLVideoSink, QSettingsRepository)
 - 将 `SwrContext`、`SwsContext`、SDL mutex/condition 逐个从 `VideoState` 裸字段迁移到所有权对象；
 - 为硬件解码、滤镜链和字幕插件提供真实播放会话配置及平台实现，而不仅是接口；
 - 将 `PlaybackSessionManager` 接入主窗口/播放列表，当前它已经支持多会话对象管理，但默认 UI 仍使用兼容的单实例后端。
+
+## 16. 当前接入进展
+
+本轮进一步完成了以下实际接入：
+
+- `MainWindow` 不再直接构造 `PlaybackService`，而是通过 `PlaybackSessionManager` 创建默认会话；后续可在不改变 UI 命令接口的情况下增加第二个会话；
+- `VideoOutputResources` 已在 renderer 创建/复用路径绑定，纹理资源边界与现有渲染循环保持一致；
+- `VideoState::continue_read_thread` 增加 `SdlCondPtr` 所有者，线程停止后由 RAII 释放 condition；
+- 现有读取线程、音频线程和视频线程保留兼容入口，已经可以逐步将 `DemuxReader`、`DecoderComponent` 迁入，而不需要再次改变 UI 或播放服务接口；
+- 主工程和生命周期测试在本轮修改后均构建通过。
+
+仍然不能安全“一步替换”的部分是 packet/frame queue。它们当前使用内嵌 `AVPacket`、SDL mutex/condition 和跨线程等待协议，必须先改造初始化/销毁函数，禁止对含 C++ RAII 成员的对象使用 `memset`，再把队列资源所有权迁移到 RAII 类型。硬件解码、滤镜、字幕也需要在真实帧管线中接入，而不是只创建对象，因此后续应以媒体文件集成测试作为验收标准。
+
+## 17. 当前轮次：读取管线接入
+
+- `VideoCtrl::read_thread()` 已使用 `VideoState::demux_reader` 完成输入打开、中断回调绑定、流信息探测和 packet 读取；
+- `DemuxReader` 新增带中断回调的打开接口，读取线程停止时 FFmpeg I/O 可以通过 `abort_request` 中断；
+- `VideoState` 继续保留 `ic` 非拥有观察指针，所有权由 `DemuxReader` 管理，避免格式上下文双重释放；
+- 主工程和 QtTest 生命周期测试在读取管线迁移后通过。
+
+音视频解码线程仍保留旧的队列协议，但已具备迁移到 `DecoderComponent` 的上下文边界。下一轮应先为 packet/frame queue 增加拥有者和停止协议测试，再迁移 decoder send/receive，最后接入硬件帧和滤镜，避免在后台线程仍持有资源时销毁 FFmpeg 上下文。
+
+## 18. 当前轮次：队列所有权与 DecoderComponent 迁移
+
+- `PacketQueue` 和 `FrameQueue` 分别拥有 SDL mutex/condition 的 RAII owner，裸指针仅作为兼容观察指针保留；
+- 移除队列初始化阶段对含非平凡成员对象的整体 `memset`，并补充同步对象创建失败与帧槽位部分初始化的回滚；
+- packet 数量和 serial 的读取统一通过加锁辅助函数完成，避免 decoder 线程无锁读取队列状态；
+- abort 使用 condition broadcast，以同时唤醒多个等待中的生产者/消费者；
+- `decoder_abort()` 保持“abort、唤醒、join、flush/释放”的顺序，并对线程状态做 `joinable()` 防护；
+- `Decoder` 已持有 `DecoderComponent`，音视频 send/receive/flush 通过组件边界执行；现有 codec context 仍由兼容路径提供并以观察方式绑定，避免重复释放。
+
+验证结果：使用 Qt 6.7.2 MinGW 11.2 工具链完成 Release 构建，QtTest 回归测试通过。真实媒体播放、seek、网络流和高并发队列场景仍需后续集成测试覆盖。

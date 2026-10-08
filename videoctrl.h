@@ -143,6 +143,7 @@ private:
     ClockController m_clock_controller;
     AudioExtractionService m_audio_extraction_service;
     AudioOutputDevice m_audio_output;
+    VideoOutputResources m_video_output_resources;
 
     bool m_audio_force_play = true;//音频强制播放一帧，配合step使用
 public:

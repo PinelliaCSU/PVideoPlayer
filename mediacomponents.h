@@ -6,7 +6,10 @@
 class DemuxReader final
 {
 public:
+    using InterruptCallback = int (*)(void *);
+
     bool open(const char *locator);
+    bool open(const char *locator, InterruptCallback callback, void *opaque);
     int read(AVPacket *packet);
     int seek(int64_t timestamp, AVRational timeBase);
     int bestStream(AVMediaType type) const;
@@ -20,13 +23,17 @@ private:
 class DecoderComponent final
 {
 public:
+    void attach(AVCodecContext *context);
+    void detach();
     bool open(const AVCodecParameters *parameters, AVRational packetTimeBase);
     int send(const AVPacket *packet);
     int receive(AVFrame *frame);
+    void flush();
     AVCodecContext *context() const;
     void close();
 
 private:
+    AVCodecContext *m_attached_context = nullptr;
     AvCodecContextPtr m_context;
 };
 

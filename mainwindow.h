@@ -12,6 +12,7 @@
 #include "title.h"
 
 class PlaybackService;
+class PlaybackSessionManager;
 
 QT_BEGIN_NAMESPACE
 namespace Ui {
@@ -76,6 +77,7 @@ private:
     QPoint _drag_position;
     QMenu _menu;
     PlaybackService *_playback_service;
+    PlaybackSessionManager *_session_manager;
 
     QString _playing_file_path;      // 当前正在跟踪播放位置的文件路径
     int  _cached_total_seconds = 0;   // 当前视频总时长

@@ -283,7 +283,9 @@ VideoState * VideoCtrl::stream_open(const char *filename) {
     if (packet_queue_init(&is->audioq) < 0)
         goto fail;
 
-    if (!((is->continue_read_thread = SDL_CreateCond())))
+    is->owned_continue_read_thread.reset(SDL_CreateCond());
+    is->continue_read_thread = is->owned_continue_read_thread.get();
+    if (!is->continue_read_thread)
         goto fail;
 
     init_clock(&is->vidclk, &is->videoq.serial);
@@ -370,13 +372,11 @@ double VideoCtrl::get_clock(Clock *c) {
 
 void VideoCtrl::read_thread(VideoState *is) {
     AVFormatContext *ic = nullptr;
-    int err, ret = 0;
+    int ret = 0;
     int stream_index[AVMEDIA_TYPE_NB];
     AVPacket pkt1, *pkt = &pkt1;
     int64_t stream_start_time;
     int pkt_in_play_range = 0;
-    AVDictionaryEntry *t;
-    AVDictionary **opts;
     SDL_mutex *wait_mutex = SDL_CreateMutex();
     int pkt_ts = 0;
 
@@ -387,35 +387,17 @@ void VideoCtrl::read_thread(VideoState *is) {
 
     memset(stream_index, -1, sizeof(stream_index));
     is->eof = 0;
-    ic = avformat_alloc_context();
-    if (!ic) {
-        av_log_error("cannot alloc context");
-        ret = AVERROR(ENOMEM);
-        goto fail;
-    }
-    ic->interrupt_callback.callback = decode_interrupt_cb;
-    ic->interrupt_callback.opaque = is;
-
-    err = avformat_open_input(&ic, is->filename, is->iformat, nullptr);
-    if (err < 0) {
+    if (!is->demux_reader.open(is->filename, decode_interrupt_cb, is)) {
         av_log_error("cannot open %s\n", is->filename);
         ret = -1;
         goto fail;
     }
+    ic = is->demux_reader.context();
 
     // 输出视频信息，可以不写
     av_dump_format(ic, 0, is->filename, 0);
 
-    is->owned_ic.reset(ic);
-    is->ic = is->owned_ic.get();
-
-    opts = nullptr;
-    err = avformat_find_stream_info(ic, opts);
-    if (err < 0) {
-        av_log_error("cannot find stream info\n");
-        ret = -1;
-        goto fail;
-    }
+    is->ic = ic;
 
     // mark: avformat_find_stream_info 执行后文件指针探针会一直往后移动，可能已经移动到了末尾，eof就会被设置为1，即被认为文件已经结束。但实际上我们还没开始读取数据播放视频呢，所以我们手动将eof置为0，防止探针被移动到了文件末尾后将eof置为1的情况
     if (ic->pb)
@@ -597,7 +579,7 @@ void VideoCtrl::read_thread(VideoState *is) {
             continue;
         }
 
-        ret = av_read_frame(ic, pkt);
+        ret = is->demux_reader.read(pkt);
         if (ret < 0) {
             // 如果文件读取结束了？
             if ((ret == AVERROR_EOF || avio_feof(ic->pb)) && !is->eof) {
@@ -654,8 +636,10 @@ void VideoCtrl::read_thread(VideoState *is) {
 
     ret = 0;
 fail:
-    if (ic && !is->ic)
-        avformat_close_input(&ic);
+    if (ret != 0) {
+        is->demux_reader.close();
+        is->ic = nullptr;
+    }
     if (ret != 0) {
         SDL_Event event;
         event.type = FF_QUIT_EVENT;
@@ -1468,6 +1452,7 @@ void VideoCtrl::do_exit(VideoState *is) {
             m_renderer = SDL_CreateRenderer(m_window, -1, 0);
         }
         if (m_renderer) {
+            m_video_output_resources.attachRenderer(m_renderer);
             // 可以发现会从 direct3d 变成了 opengl
             if (!SDL_GetRendererInfo(m_renderer, &info))
                 av_log_info("Initialized %s renderer.\n", info.name);
@@ -1478,6 +1463,7 @@ void VideoCtrl::do_exit(VideoState *is) {
                 av_log_info("do_exit: recreating texture from m_last_frame, size=%d x %d, format=%d\n",
                             m_last_frame->width, m_last_frame->height, m_last_frame->format);
                 int sdlPixFmt = m_last_frame->format == AV_PIX_FMT_YUV420P ? SDL_PIXELFORMAT_YV12 : SDL_PIXELFORMAT_ARGB8888;
+                m_video_output_resources.attachRenderer(m_renderer);
                 m_vid_texture.reset(SDL_CreateTexture(m_renderer, sdlPixFmt,
                                                   SDL_TEXTUREACCESS_STREAMING, m_last_frame->width, m_last_frame->height));
                 if (m_vid_texture) {
@@ -1525,6 +1511,7 @@ void VideoCtrl::stream_close(VideoState *is) {
     if (is->audio_stream >= 0)
         stream_component_close(is, is->audio_stream);
 
+    is->demux_reader.close();
     is->owned_ic.reset();
     is->ic = nullptr;
 
@@ -1534,7 +1521,7 @@ void VideoCtrl::stream_close(VideoState *is) {
     frame_queue_destory(&is->pictq);
     frame_queue_destory(&is->sampq);
 
-    SDL_DestroyCond(is->continue_read_thread);
+    is->owned_continue_read_thread.reset();
 
     sws_freeContext(is->img_convert_ctx);
 

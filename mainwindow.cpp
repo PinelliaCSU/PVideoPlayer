@@ -10,6 +10,7 @@
 #include <QShortcut>
 #include "videoctrl.h"
 #include "playbackservice.h"
+#include "playbacksessionmanager.h"
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -18,10 +19,12 @@ MainWindow::MainWindow(QWidget *parent)
     _title(this),
     _move_drag(false),
     _menu(this),
-    _playback_service(new PlaybackService(VideoCtrl::GetInstance(),
-                                          VideoCtrl::GetInstance(),
-                                          this))
+    _playback_service(nullptr),
+    _session_manager(new PlaybackSessionManager(this))
 {
+    const int sessionId = _session_manager->createSession(VideoCtrl::GetInstance(),
+                                                          VideoCtrl::GetInstance());
+    _playback_service = _session_manager->session(sessionId);
     ui->setupUi(this);
     setWindowFlags(Qt::FramelessWindowHint);
     this->setWindowIcon(QIcon(":/res/icon.png"));
