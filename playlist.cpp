@@ -3,304 +3,252 @@
 #include "guiutils.h"
 #include "configutils.h"
 #include "medialist.h"
-#include <QDir>
+
+#include <QFileInfo>
 #include <QMessageBox>
 #include <QRandomGenerator>
 
-
 Playlist::Playlist(QWidget *parent)
     : QWidget(parent)
-    , ui(new Ui::Playlist),
-    _current_media_index(0),
-    _play_mode(PLAYMODE_REPEAT_LIST)
+    , ui(new Ui::Playlist)
+    , _current_media_index(0)
+    , _model(this)
+    , _play_mode(PLAYMODE_REPEAT_LIST)
 {
     ui->setupUi(this);
 }
 
 Playlist::~Playlist()
 {
-    QStringList strPlayList;
-    for(int i = 0;i < ui->List->count();i++){
-        strPlayList.append(ui->List->item(i)->toolTip());
+    QStringList playlist;
+    for (const MediaItem &item : _model.items()) {
+        playlist.append(item.locator);
     }
-    ConfigUtils::SavePlaylist(strPlayList);
-
+    ConfigUtils::SavePlaylist(playlist);
     delete ui;
 }
 
-bool Playlist::Init(){
-    //UI初始化检测
-    if(initUi() == false){
+bool Playlist::Init()
+{
+    if (!initUi() || !ui->List->Init()) {
         return false;
     }
 
-    if(ui->List->Init() == false){
-        return false;
-    }
-
-    //连接信号与槽函数
     connectSignalSlots();
-
-    //清空播放列表
+    _model.clear();
     ui->List->clear();
-    //从配置中获取文件列表
-    QStringList strPlayList;
 
-    ConfigUtils::LoadPlaylist(strPlayList);
-    for(const QString & videoFile: strPlayList){
-        //加入播放列表
-        SlotOnAddFile(videoFile);
+    QStringList savedPlaylist;
+    ConfigUtils::LoadPlaylist(savedPlaylist);
+    for (const QString &locator : savedPlaylist) {
+        SlotOnAddFile(locator);
     }
-
-    //暂时选取第一个视频播放
-    if(strPlayList.length() > 0){
+    if (_model.rowCount() > 0) {
         ui->List->setCurrentRow(0);
     }
 
-    //开启QT控制拖拽功能
     setAcceptDrops(true);
-
     return true;
 }
 
 void Playlist::connectSignalSlots()
 {
     connect(ui->List, &MediaList::SigAddFile, this, &Playlist::SlotOnAddFile);
-    connect(ui->List, &MediaList::itemDoubleClicked, this, &Playlist::SlotOnPlayVideoFile);
+    connect(ui->List, &MediaList::itemDoubleClicked,
+            this, &Playlist::SlotOnPlayVideoFile);
+    connect(ui->List, &MediaList::SigRemoveFile, this, [this](int row) {
+        _model.removeAt(row);
+        if (_current_media_index >= _model.rowCount()) {
+            _current_media_index = qMax(0, _model.rowCount() - 1);
+        }
+    });
+    connect(ui->List, &MediaList::SigClearList, this, [this]() {
+        _model.clear();
+        _current_media_index = 0;
+    });
 }
 
-void Playlist::SlotOnAddFile(QString filePath){
-    if(filePath.isEmpty()) {
-        qDebug() << "filePath is empty";
+bool Playlist::addMediaItem(const QString &locator, bool showDuplicateMessage)
+{
+    const bool networkStream = GuiUtils::CheckNetworkStream(locator);
+    const QString displayName = networkStream
+        ? locator
+        : QFileInfo(locator).fileName();
+
+    if (!_model.addItem({locator, displayName, networkStream})) {
+        if (showDuplicateMessage) {
+            QMessageBox::information(
+                this, tr("重复添加"),
+                tr("文件 \"%1\" 已经在播放列表中存在。").arg(displayName));
+        }
+        return false;
+    }
+
+    rebuildView();
+    return true;
+}
+
+void Playlist::rebuildView()
+{
+    ui->List->clear();
+    for (const MediaItem &item : _model.items()) {
+        auto *widgetItem = new QListWidgetItem(item.displayName, ui->List);
+        widgetItem->setData(Qt::UserRole, item.locator);
+        widgetItem->setToolTip(item.locator);
+    }
+}
+
+void Playlist::SlotOnAddFile(QString filePath)
+{
+    if (filePath.isEmpty()) {
+        qWarning() << "Playlist::SlotOnAddFile: empty locator";
         return;
     }
 
-    // 判断是否为网络流
-    bool isNetworkStream = GuiUtils::CheckNetworkStream(filePath);
-
-    QString absolutePath;
-    if (!isNetworkStream) {
-        QFileInfo fileInfo(filePath);
-        if(!fileInfo.exists()) {
-            QMessageBox::warning(this, tr("文件不存在"),
-                                 tr("文件 \"%1\" 不存在，请检查路径是否正确。").arg(fileInfo.fileName()));
-            qDebug() << "文件不存在:" << filePath;
+    const bool networkStream = GuiUtils::CheckNetworkStream(filePath);
+    QString locator = filePath;
+    if (!networkStream) {
+        const QFileInfo fileInfo(filePath);
+        if (!fileInfo.exists()) {
+            QMessageBox::warning(
+                this, tr("文件不存在"),
+                tr("文件 \"%1\" 不存在，请检查路径是否正确。").arg(fileInfo.fileName()));
             return;
         }
-        absolutePath = fileInfo.absoluteFilePath();
-    } else {
-        absolutePath = filePath;
+        locator = fileInfo.absoluteFilePath();
     }
-
-    // 查重
-    bool isExist = false;
-    for(int i = 0; i < ui->List->count(); i++) {
-        QListWidgetItem *item = ui->List->item(i);
-        QString existingPath = item->data(Qt::UserRole).toString();
-        if(existingPath == absolutePath) {
-            isExist = true;
-            break;
-        }
-    }
-
-    if(!isExist) {
-        QListWidgetItem *p_item = new QListWidgetItem(ui->List);
-        p_item->setData(Qt::UserRole, QVariant(absolutePath));
-        p_item->setToolTip(absolutePath);
-        if (isNetworkStream) {
-            p_item->setText(absolutePath);  // 网络流直接显示完整 URL
-        } else {
-            p_item->setText(QFileInfo(filePath).fileName());
-        }
-        ui->List->addItem(p_item);
-    } else {
-        QString dupName = isNetworkStream ? absolutePath : QFileInfo(filePath).fileName();
-        QMessageBox::information(this, tr("重复添加"),
-                                 tr("文件 \"%1\" 已经在播放列表中存在。").arg(dupName));
-    }
+    addMediaItem(locator, true);
 }
 
-
-void Playlist::SlotOnPlayVideoFile(QListWidgetItem * item){
-    //发送播放信号
-    emit SigPlay(item->data(Qt::UserRole).toString());
-
+void Playlist::SlotOnPlayVideoFile(QListWidgetItem *item)
+{
+    if (item == nullptr) {
+        return;
+    }
+    const int row = ui->List->row(item);
+    if (row < 0 || row >= _model.rowCount()) {
+        return;
+    }
+    _current_media_index = row;
     ui->List->setCurrentItem(item);
-    _current_media_index = ui->List->row(item);
-
+    emit SigPlay(_model.itemAt(row).locator);
 }
 
 void Playlist::SlotOnBackPlay()
 {
-    int count = ui->List->count();
-    if (count == 0) return;
-
-    int newIndex;
-    if (_current_media_index == 0) {
-        newIndex = count - 1;  // 回到最后一个
-    } else {
-        newIndex = _current_media_index - 1;
+    const int count = _model.rowCount();
+    if (count == 0) {
+        return;
     }
-    playByIndex(newIndex);
+    playByIndex(_current_media_index == 0
+                    ? count - 1
+                    : _current_media_index - 1);
 }
 
-// ===== 改造：下一首（根据模式决定行为） =====
 void Playlist::SlotOnNextPlay()
 {
-    int count = ui->List->count();
-    if (count == 0) return;
+    const int count = _model.rowCount();
+    if (count == 0) {
+        return;
+    }
 
-    int newIndex;
+    int newIndex = _current_media_index;
     switch (_play_mode) {
     case PLAYMODE_REPEAT_ONE:
-        // 单曲循环：重新播放当前项
-        newIndex = _current_media_index;
         break;
-
     case PLAYMODE_NORMAL:
-        // 顺序播放：不是最后一个就继续，否则停止
         if (_current_media_index >= count - 1) {
-            return; // 播完了，不做任何操作
+            return;
         }
-        newIndex = _current_media_index + 1;
+        ++newIndex;
         break;
-
     case PLAYMODE_SHUFFLE:
-        // 随机播放：随机选一个（排除当前项，只有1项时不变）
-        if (count == 1) {
-            newIndex = 0;
-        } else {
+        if (count > 1) {
             do {
                 newIndex = QRandomGenerator::global()->bounded(count);
             } while (newIndex == _current_media_index);
         }
         break;
-
     case PLAYMODE_REPEAT_LIST:
     default:
-        // 列表循环：到末尾就回到开头（原有行为）
-        if (_current_media_index >= count - 1) {
-            newIndex = 0;
-        } else {
-            newIndex = _current_media_index + 1;
-        }
+        newIndex = (_current_media_index + 1) % count;
         break;
     }
     playByIndex(newIndex);
 }
 
-void Playlist::OnAddFileAndPlay(QString strFileName)
+void Playlist::OnAddFileAndPlay(QString fileName)
 {
-    // 判断是否为网络流
-    bool isNetworkStream = GuiUtils::CheckNetworkStream(strFileName);
-
-    if (!isNetworkStream) {
-        // 本地文件：扩展名校验
-        bool supportMovie = strFileName.endsWith(".mkv", Qt::CaseInsensitive) ||
-                            strFileName.endsWith(".rmvb", Qt::CaseInsensitive) ||
-                            strFileName.endsWith(".mp4", Qt::CaseInsensitive) ||
-                            strFileName.endsWith(".avi", Qt::CaseInsensitive) ||
-                            strFileName.endsWith(".flv", Qt::CaseInsensitive) ||
-                            strFileName.endsWith(".wmv", Qt::CaseInsensitive) ||
-                            strFileName.endsWith(".3gp", Qt::CaseInsensitive);
-        if (!supportMovie) {
-            return;
-        }
-
-        QFileInfo fileInfo(strFileName);
-        if(!fileInfo.exists()) {
-            QMessageBox::warning(this, tr("文件不存在"),
-                                 tr("文件 \"%1\" 不存在，请检查路径是否正确。").arg(fileInfo.fileName()));
-            qDebug() << "文件不存在:" << strFileName;
-            return;
-        }
-
-        QString absolutePath = fileInfo.absoluteFilePath();
-
-        QListWidgetItem *pItem = nullptr;
-        bool isExist = false;
-        for(int i = 0; i < ui->List->count(); i++) {
-            QListWidgetItem *item = ui->List->item(i);
-            QString existingPath = item->data(Qt::UserRole).toString();
-            if(existingPath == absolutePath) {
-                pItem = item;
-                isExist = true;
+    const bool networkStream = GuiUtils::CheckNetworkStream(fileName);
+    if (!networkStream) {
+        const QStringList supportedExtensions = {
+            ".mkv", ".rmvb", ".mp4", ".avi", ".flv", ".wmv", ".3gp"
+        };
+        bool supported = false;
+        for (const QString &extension : supportedExtensions) {
+            if (fileName.endsWith(extension, Qt::CaseInsensitive)) {
+                supported = true;
                 break;
             }
         }
-
-        if(!isExist) {
-            pItem = new QListWidgetItem(ui->List);
-            pItem->setData(Qt::UserRole, QVariant(absolutePath));
-            pItem->setText(fileInfo.fileName());
-            pItem->setToolTip(absolutePath);
-            ui->List->addItem(pItem);
+        if (!supported) {
+            return;
         }
 
-        SlotOnPlayVideoFile(pItem);
-    } else {
-        // 网络流：直接添加并播放
-        QListWidgetItem *pItem = nullptr;
-        bool isExist = false;
-        for(int i = 0; i < ui->List->count(); i++) {
-            QListWidgetItem *item = ui->List->item(i);
-            QString existingPath = item->data(Qt::UserRole).toString();
-            if(existingPath == strFileName) {
-                pItem = item;
-                isExist = true;
-                break;
-            }
+        const QFileInfo fileInfo(fileName);
+        if (!fileInfo.exists()) {
+            QMessageBox::warning(
+                this, tr("文件不存在"),
+                tr("文件 \"%1\" 不存在，请检查路径是否正确。").arg(fileInfo.fileName()));
+            return;
         }
-
-        if(!isExist) {
-            pItem = new QListWidgetItem(ui->List);
-            pItem->setData(Qt::UserRole, QVariant(strFileName));
-            pItem->setText(strFileName);   // 显示完整 URL
-            pItem->setToolTip(strFileName);
-            ui->List->addItem(pItem);
-        }
-
-        SlotOnPlayVideoFile(pItem);
+        fileName = fileInfo.absoluteFilePath();
     }
+
+    int row = -1;
+    const QList<MediaItem> items = _model.items();
+    for (int i = 0; i < items.size(); ++i) {
+        if (items.at(i).locator == fileName) {
+            row = i;
+            break;
+        }
+    }
+    if (row < 0) {
+        addMediaItem(fileName, false);
+        row = _model.rowCount() - 1;
+    }
+    playByIndex(row);
 }
-bool Playlist::initUi(){
+
+bool Playlist::initUi()
+{
     setStyleSheet(GuiUtils::LoadQss(":/res/qss/playlist.css"));
     return true;
 }
 
 void Playlist::dropEvent(QDropEvent *event)
 {
-    QList<QUrl> urls = event->mimeData()->urls();
-    if(urls.isEmpty()) {
-        return;
-    }
-    for(const QUrl& url: urls) {
-        QString strFileName = url.toLocalFile();
-        SlotOnAddFile(strFileName);
+    const QList<QUrl> urls = event->mimeData()->urls();
+    for (const QUrl &url : urls) {
+        SlotOnAddFile(url.toLocalFile());
     }
 }
 
 void Playlist::dragEnterEvent(QDragEnterEvent *event)
 {
-    //    允许当前拖拽生效，使得事件往后续传递，即给 dropEvent 可以响应
     event->acceptProposedAction();
 }
 
-
-//播放模式相关
-
-// 提取公共的"按索引播放"方法
 void Playlist::playByIndex(int index)
 {
-    if (index < 0 || index >= ui->List->count()) {
+    if (index < 0 || index >= _model.rowCount()) {
         return;
     }
     _current_media_index = index;
-
-    SlotOnPlayVideoFile(ui->List->item(index));
+    ui->List->setCurrentRow(index);
+    emit SigPlay(_model.itemAt(index).locator);
 }
 
-// 模式设置/获取
 void Playlist::SetPlayMode(PlayMode mode)
 {
     _play_mode = mode;
@@ -310,5 +258,3 @@ PlayMode Playlist::GetPlayMode() const
 {
     return _play_mode;
 }
-
-

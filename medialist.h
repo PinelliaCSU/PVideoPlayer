@@ -18,6 +18,8 @@ protected:
     void contextMenuEvent(QContextMenuEvent *);
 signals:
     void SigAddFile(QString filePath);
+    void SigRemoveFile(int row);
+    void SigClearList();
 private:
     bool initUi();
     void addFile();

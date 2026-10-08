@@ -6,6 +6,7 @@
 #include <QDropEvent>
 #include <QDragEnterEvent>
 #include <QMimeData>
+#include "playlistmodel.h"
 
 namespace Ui {
 class Playlist;
@@ -46,6 +47,8 @@ protected:
 private:
     bool initUi();
     void connectSignalSlots();
+    bool addMediaItem(const QString &locator, bool showDuplicateMessage);
+    void rebuildView();
 
     void playByIndex(int index);//播放指定索引
 signals:
@@ -53,6 +56,7 @@ signals:
 private:
     Ui::Playlist *ui;
     int _current_media_index;
+    PlaylistModel _model;
 
     PlayMode _play_mode;//当前播放模式
 };

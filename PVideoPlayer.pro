@@ -9,28 +9,47 @@ CONFIG += c++17
 #DEFINES += QT_DISABLE_DEPRECATED_BEFORE=0x060000    # disables all the APIs deprecated before Qt 6.0.0
 
 SOURCES += \
+    audioextractionservice.cpp \
+    clockcontroller.cpp \
     configutils.cpp \
     ctrlbar.cpp \
     customslider.cpp \
     guiutils.cpp \
     main.cpp \
     mainwindow.cpp \
+    mediacomponents.cpp \
+    playbacksessionmanager.cpp \
     medialist.cpp \
+    playbackservice.cpp \
     playlist.cpp \
+    playlistmodel.cpp \
+    settingsrepository.cpp \
     show.cpp \
     sonic.cpp \
+    subtitleplugin.cpp \
     title.cpp \
     videoctrl.cpp
 
 HEADERS += \
+    audioextractionservice.h \
+    clockcontroller.h \
     configutils.h \
     ctrlbar.h \
     customslider.h \
     datactrl.h \
     guiutils.h \
     mainwindow.h \
+    mediacomponents.h \
+    playbacksessionmanager.h \
+    media_types.h \
     medialist.h \
+    media_raii.h \
+    playbackbackend.h \
+    playbackservice.h \
     playlist.h \
+    playlistmodel.h \
+    settingsrepository.h \
+    subtitleplugin.h \
     show.h \
     sonic.h \
     title.h \

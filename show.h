@@ -9,6 +9,8 @@
 #include<QLabel>
 #include<QTimer>
 #include<QEvent>
+
+class PlaybackService;
 namespace Ui {
 class Show;
 }
@@ -21,6 +23,7 @@ public:
     explicit Show(QWidget *parent = nullptr);
     ~Show();
     bool Init();
+    void SetPlaybackService(PlaybackService *service);
     void OnPlay(QString strFile);
     void OnFrameDimensionsChanged(int nFrameWidth, int nFrameHeight);
     void ShowToast(const QString &text);
@@ -54,6 +57,7 @@ private:
     int _nLastFrameHeight;
 
     QString _current_file; // 当前播放的文件路径
+    PlaybackService *_playback_service = nullptr;
 
     QLabel *_toastLabel;  // 提示标签（使用顶层窗口实现透明，右上角显示）
     QTimer *_toastTimer;  // 提示定时器

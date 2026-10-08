@@ -11,6 +11,11 @@
 
 #include "datactrl.h"
 #include "sonic.h"
+#include "playbackbackend.h"
+#include "clockcontroller.h"
+#include "media_raii.h"
+#include "audioextractionservice.h"
+#include "mediacomponents.h"
 
 
 #define PLAYBACK_RATE_MIN           (0.25)     // 最慢
@@ -20,12 +25,12 @@
 #define NORMAL_SAMPLE_RATES         (44100)  // 默认采样率
 #define NORMAL_CHANNELS             (2)     // 默认声道数
 
-class VideoCtrl : public QObject
+class VideoCtrl : public PlaybackEventSource, public IPlaybackBackend
 {
     Q_OBJECT
 public:
 
-    void start_play(QString filename, WId play_wid);
+    void start_play(QString filename, WId play_wid) override;
     ~VideoCtrl();
     static VideoCtrl *GetInstance();
 
@@ -38,33 +43,22 @@ public:
     int64_t get_target_frequency();
     int get_target_channels();
     bool is_normal_playback_rate();
-    void OnSetSpeed(float speed); // 设置指定倍速
-    void OnPause();
-    void OnStop();
-    void OnUserStop(); // 用户主动点击停止按钮
-    void OnPlayVolume(double percent);
-    void OnPlaySeek(double percent);
-    void OnSeekForward();
-    void OnSeekBack();
-    void OnAddVolume();
-    void OnSubVolume();
-    void OnStep(); // 逐帧播放
+    void OnSetSpeed(float speed) override; // 设置指定倍速
+    void OnPause() override;
+    void OnStop() override;
+    void OnUserStop() override; // 用户主动点击停止按钮
+    void OnPlayVolume(double percent) override;
+    void OnPlaySeek(double percent) override;
+    void OnSeekForward() override;
+    void OnSeekBack() override;
+    void OnAddVolume() override;
+    void OnSubVolume() override;
+    void OnStep() override; // 逐帧播放
 
     //获取音频
-    bool OnExtractAudio(const QString &inputFile, const QString &outputFile);
+    bool OnExtractAudio(const QString &inputFile, const QString &outputFile) override;
 signals:
-    void SigStartPlay(QString strMsg);
-    void SigSpeed(float speed);
-    void SigPauseStat(bool paused);
-    void SigStopFinished(); // 自然播放结束
-    void SigUserStopFinished(); // 用户主动停止播放
     void SigStop();
-    void SigVideoTotalSeconds(int seconds);
-    void SigVideoPlaySeconds(int seconds);
-    void SigVideoVolume(double percent);
-    void SigFrameDimensionsChanged(int nFrameWidth, int nFrameHeight);
-    void SigSeekForwardCompleted(int targetSeconds);  // 快进完成
-    void SigSeekBackCompleted(int targetSeconds);
 private:
     explicit VideoCtrl(QObject *parent = nullptr);
 
@@ -97,7 +91,7 @@ private:
     void video_open();
     void video_image_display(VideoState *is);
     void calculate_display_rect(SDL_Rect *rect, int src_x_left, int src_y_top, int src_width, int src_height, int pic_width, int pic_height, AVRational pic_sar);
-    int realloc_texture(SDL_Texture **texture, Uint32 new_format, int new_width, int new_height, SDL_BlendMode blend_mode, int init_texture);
+    int realloc_texture(SdlTexturePtr &texture, Uint32 new_format, int new_width, int new_height, SDL_BlendMode blend_mode, int init_texture);
     int upload_texture(SDL_Texture *tex, AVFrame *frame, struct SwsContext **img_convert_ctx);
     int stream_has_enough_packets(AVStream *st, int stream_id, PacketQueue *queue);
 
@@ -140,12 +134,15 @@ private:
     bool m_stop_emitted; //标记是否已经发送过停止信号
     QString m_current_file; // 当前播放文件路径
     bool m_video_open; // 视频窗口打开状态
-    SDL_Texture* m_vid_texture;       // 视频纹理（由 VideoCtl 统一管理，播放结束后保留用于重新渲染）
+    SdlTexturePtr m_vid_texture;       // 视频纹理由 RAII 管理
     AVRational m_frame_sar;            // 当前帧的宽高比
     bool m_frame_flip_v;               // 当前帧是否垂直翻转
-    AVFrame* m_last_frame;             // 最后一帧的引用（播放结束后用于重建纹理，av_frame_ref 保持数据有效）
+    AvFramePtr m_last_frame;             // 最后一帧的引用由 RAII 管理
     bool m_idle_loop;                   // 空闲事件循环运行标志（true=运行中，类似 m_play_loop）
     bool m_user_stop;                   // 用户主动停止标志（区分自然播放结束和用户点击停止）
+    ClockController m_clock_controller;
+    AudioExtractionService m_audio_extraction_service;
+    AudioOutputDevice m_audio_output;
 
     bool m_audio_force_play = true;//音频强制播放一帧，配合step使用
 public:

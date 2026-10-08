@@ -104,7 +104,7 @@ int is_realtime(AVFormatContext *s) {
 }
 
 VideoCtrl::VideoCtrl(QObject *parent):
-    QObject(parent),
+    PlaybackEventSource(parent),
     m_init(false),
     m_play_loop(false),
     m_cur_stream(nullptr),
@@ -179,11 +179,10 @@ VideoCtrl::~VideoCtrl() {
 
     // 清理视频纹理
     if (m_vid_texture) {
-        SDL_DestroyTexture(m_vid_texture);
-        m_vid_texture = nullptr;
+        m_vid_texture.reset();
     }
     // 清理最后一帧引用
-    av_frame_free(&m_last_frame);
+    m_last_frame.reset();
     // 清理渲染器
     if(m_renderer) {
         SDL_DestroyRenderer(m_renderer);
@@ -195,7 +194,10 @@ VideoCtrl::~VideoCtrl() {
         m_window = nullptr;
     }
     //清理日志文件
-    fclose(log_file);
+    if (log_file) {
+        fclose(log_file);
+        log_file = nullptr;
+    }
     // 清理 SDL
     SDL_Quit();
 }
@@ -228,7 +230,9 @@ void VideoCtrl::start_play(QString filename, WId play_wid) {
     VideoState *is = stream_open(filename_c);
     if (!is) {
         av_log_error("Failed to initialize!\n");
-        do_exit(m_cur_stream);
+        m_cur_stream = nullptr;
+        emit SigError(tr("无法打开媒体：%1").arg(filename));
+        return;
     }
 
     m_cur_stream = is;
@@ -246,7 +250,7 @@ VideoCtrl * VideoCtrl::GetInstance() {
 }
 
 VideoState * VideoCtrl::stream_open(const char *filename) {
-    VideoState *is = (VideoState*)av_mallocz(sizeof(VideoState));
+    VideoState *is = new (std::nothrow) VideoState{};
     if (!is) {
         return nullptr;
     }
@@ -309,16 +313,11 @@ fail:
 }
 
 void VideoCtrl::init_clock(Clock *c, int *queueSerial) {
-    c->speed = 1.0;
-    // 默认是播放状态
-    c->paused = 0;
-    c->queue_serial = queueSerial;
-    set_clock(c, NAN, -1);
+    m_clock_controller.initialize(c, queueSerial);
 }
 
 void VideoCtrl::set_clock(Clock *c, double pts, int serial) {
-    double time = av_gettime_relative() / 1000000.0;
-    set_clock_at(c, pts, serial, time);
+    m_clock_controller.set(c, pts, serial);
 }
 
 void VideoCtrl::set_clock_speed(Clock *c, double speed) {
@@ -327,15 +326,11 @@ void VideoCtrl::set_clock_speed(Clock *c, double speed) {
      * 然后再修改 speed。这样 get_clock 在之后的时间推进中就能正确使用新的 speed 值。
      * 如果不先 set_clock，那么 speed 改变后，用旧的 pts_drift 和 last_updated 算出来的时钟值会跳变。
      */
-    set_clock(c, get_clock(c), c->serial);
-    c->speed = speed;
+    m_clock_controller.setSpeed(c, speed);
 }
 
 void VideoCtrl::set_clock_at(Clock *c, double pts, int serial, double time) {
-    c->pts = pts;
-    c->last_updated = time;
-    c->pts_drift = pts - time;
-    c->serial = serial;
+    m_clock_controller.setAt(c, pts, serial, time);
 }
 
 double VideoCtrl::get_master_clock(VideoState *is) {
@@ -355,13 +350,9 @@ double VideoCtrl::get_master_clock(VideoState *is) {
 }
 
 double VideoCtrl::get_clock(Clock *c) {
-    if (*c->queue_serial != c->serial)
-        return NAN;
-    // 暂停的时候时间轴不会走动，所以直接返回pts
-    if (c->paused)
-        return c->pts;
-    else {
-        double time = av_gettime_relative() / 1000000.0;
+    return m_clock_controller.value(c);
+#if 0
+    /* {
         /*
          * mark：在正常情况下，应该是直接 return c->pts_drift + time
          * 有倍数播放的时候，假设是一倍速，那么 (1.0 - c->speed) = 0，那么还是上面的结果，即 return c->pts_drift + time
@@ -373,6 +364,8 @@ double VideoCtrl::get_clock(Clock *c) {
          */
         return c->pts_drift + time - (time - c->last_updated) * (1.0 - c->speed);
     }
+    */
+#endif
 }
 
 void VideoCtrl::read_thread(VideoState *is) {
@@ -413,7 +406,8 @@ void VideoCtrl::read_thread(VideoState *is) {
     // 输出视频信息，可以不写
     av_dump_format(ic, 0, is->filename, 0);
 
-    is->ic = ic;
+    is->owned_ic.reset(ic);
+    is->ic = is->owned_ic.get();
 
     opts = nullptr;
     err = avformat_find_stream_info(ic, opts);
@@ -750,6 +744,8 @@ int VideoCtrl::stream_component_open(VideoState *is, int stream_index) {
         is->audio_st = ic->streams[stream_index];
 
         decoder_init(&is->auddec, avctx, &is->audioq, is->continue_read_thread);
+        is->auddec.owned_avctx.reset(avctx);
+        is->auddec.avctx = is->auddec.owned_avctx.get();
         if ((is->ic->iformat->flags & (AVFMT_NOBINSEARCH | AVFMT_NOGENSEARCH | AVFMT_NO_BYTE_SEEK)) && !is->ic->iformat->read_seek) {
             is->auddec.start_pts = is->audio_st->start_time;
             is->auddec.start_pts_tb = is->audio_st->time_base;
@@ -757,12 +753,14 @@ int VideoCtrl::stream_component_open(VideoState *is, int stream_index) {
         packet_queue_start(is->auddec.queue);
         is->auddec.decode_thread = std::thread(&VideoCtrl::audio_thread, this, is);
         // 开始播放
-        SDL_PauseAudio(0);
+        m_audio_output.pause(false);
         break;
     case AVMEDIA_TYPE_VIDEO:
         is->last_video_stream = is->video_stream = stream_index;
         is->video_st = ic->streams[stream_index];
         decoder_init(&is->viddec, avctx, &is->videoq, is->continue_read_thread);
+        is->viddec.owned_avctx.reset(avctx);
+        is->viddec.avctx = is->viddec.owned_avctx.get();
         // 每次创建一个解码器，就调用一次 decoder_init，即插入一个 flush_pkt,实际上是为了创建一个 serial
         packet_queue_start(is->viddec.queue);
         is->viddec.decode_thread = std::thread(&VideoCtrl::video_thread, this, is);
@@ -1020,7 +1018,7 @@ int VideoCtrl::audio_open(void *opaque, int64_t wanted_channel_layout, int wante
      * mark：这里是判断，如果当前配置无法打开SDL，那么就尝试降级【即修改通道数和采样率】
      * 其实好多这种异常情况根本不会发生，写这么多代码就是为了防止很小部分可能会发生的错误
      */
-    while (SDL_OpenAudio(&wanted_spec, &spec) < 0) {
+    while (!m_audio_output.open(wanted_spec, &spec)) {
         av_log_warning("SDL_OpenAudio (%d channel, %d Hz): %s\n", wanted_spec.channels, wanted_spec.freq, SDL_GetError());
         // 声道降级，尝试使用低标准的声道看看能不能打开audio
         wanted_spec.channels = next_nb_channels[FFMIN(7, wanted_spec.channels)];
@@ -1451,8 +1449,7 @@ void VideoCtrl::do_exit(VideoState *is) {
 
     // 销毁旧纹理（渲染器销毁后它也会失效）
     if (m_vid_texture) {
-        SDL_DestroyTexture(m_vid_texture);
-        m_vid_texture = nullptr;
+        m_vid_texture.reset();
     }
     // 重新创建渲染器和纹理--因为渲染器一定会失效，所以我们直接创建一个新的
     if (m_window) {
@@ -1481,13 +1478,13 @@ void VideoCtrl::do_exit(VideoState *is) {
                 av_log_info("do_exit: recreating texture from m_last_frame, size=%d x %d, format=%d\n",
                             m_last_frame->width, m_last_frame->height, m_last_frame->format);
                 int sdlPixFmt = m_last_frame->format == AV_PIX_FMT_YUV420P ? SDL_PIXELFORMAT_YV12 : SDL_PIXELFORMAT_ARGB8888;
-                m_vid_texture = SDL_CreateTexture(m_renderer, sdlPixFmt,
-                                                  SDL_TEXTUREACCESS_STREAMING, m_last_frame->width, m_last_frame->height);
+                m_vid_texture.reset(SDL_CreateTexture(m_renderer, sdlPixFmt,
+                                                  SDL_TEXTUREACCESS_STREAMING, m_last_frame->width, m_last_frame->height));
                 if (m_vid_texture) {
                     struct SwsContext* sws_ctx = nullptr;
-                    upload_texture(m_vid_texture, m_last_frame, &sws_ctx);
+                    upload_texture(m_vid_texture.get(), m_last_frame.get(), &sws_ctx);
                     sws_freeContext(sws_ctx);
-                    SDL_SetTextureBlendMode(m_vid_texture, SDL_BLENDMODE_NONE);
+                    SDL_SetTextureBlendMode(m_vid_texture.get(), SDL_BLENDMODE_NONE);
                     av_log_info("do_exit: texture recreated successfully\n");
                 } else {
                     av_log_error("do_exit: SDL_CreateTexture failed: %s\n", SDL_GetError());
@@ -1495,7 +1492,7 @@ void VideoCtrl::do_exit(VideoState *is) {
             } else if (m_user_stop) {
                 // 用户主动停止：清空画面，释放最后一帧引用
                 av_log_info("do_exit: user stop, clearing display\n");
-                av_frame_free(&m_last_frame);
+                m_last_frame.reset();
                 m_frame_width = 0;
                 m_frame_height = 0;
                 // 清空渲染器为黑色
@@ -1503,7 +1500,7 @@ void VideoCtrl::do_exit(VideoState *is) {
                 SDL_RenderClear(m_renderer);
                 SDL_RenderPresent(m_renderer);
             } else {
-                av_log_info("do_exit: no m_last_frame to recreate texture, m_last_frame=%p\n", (void*)m_last_frame);
+                av_log_info("do_exit: no m_last_frame to recreate texture, m_last_frame=%p\n", (void*)m_last_frame.get());
             }
         }
     }
@@ -1519,14 +1516,17 @@ void VideoCtrl::do_exit(VideoState *is) {
 
 void VideoCtrl::stream_close(VideoState *is) {
     is->abort_request = 1;
-    is->read_tid.join();
+    if (is->read_tid.joinable()) {
+        is->read_tid.join();
+    }
 
     if (is->video_stream >= 0)
         stream_component_close(is, is->video_stream);
     if (is->audio_stream >= 0)
         stream_component_close(is, is->audio_stream);
 
-    avformat_close_input(&is->ic);
+    is->owned_ic.reset();
+    is->ic = nullptr;
 
     packet_queue_destroy(&is->videoq);
     packet_queue_destroy(&is->audioq);
@@ -1540,7 +1540,7 @@ void VideoCtrl::stream_close(VideoState *is) {
 
     av_free(is->filename);
 
-    av_free(is);
+    delete is;
 
     // 关闭 stem 资源
     //CloseStemSource();
@@ -1558,7 +1558,7 @@ void VideoCtrl::stream_component_close(VideoState *is, int stream_index) {
     switch (codecpar->codec_type) {
     case AVMEDIA_TYPE_AUDIO:
         decoder_abort(&is->auddec, &is->sampq);
-        SDL_CloseAudio();
+        m_audio_output.close();
         decoder_destroy(&is->auddec);
         swr_free(&is->swr_ctx);
         av_freep(&is->audio_buf1);
@@ -1677,7 +1677,7 @@ void VideoCtrl::loop_thread(VideoState *curStream) {
                         SDL_Rect rect;
                         calculate_display_rect(&rect, 0, 0, m_screen_width, m_screen_height,
                                                m_frame_width, m_frame_height, m_frame_sar);
-                        SDL_RenderCopyEx(m_renderer, m_vid_texture, NULL, &rect, 0, NULL,
+                        SDL_RenderCopyEx(m_renderer, m_vid_texture.get(), NULL, &rect, 0, NULL,
                                          (SDL_RendererFlip)(m_frame_flip_v ? SDL_FLIP_VERTICAL : 0));
                     }
                     SDL_RenderPresent(m_renderer);
@@ -2018,10 +2018,10 @@ void VideoCtrl::video_image_display(VideoState *is) {
     if (!vp->uploaded) {
         int sdlPixFmt = vp->frame->format == AV_PIX_FMT_YUV420P ? SDL_PIXELFORMAT_YV12 : SDL_PIXELFORMAT_ARGB8888;
         // 创建纹理（纹理由 VideoCtrl 统一管理，不存储在 VideoState 中）
-        if (realloc_texture(&m_vid_texture, sdlPixFmt, vp->frame->width, vp->frame->height, SDL_BLENDMODE_NONE, 0) < 0)
+        if (realloc_texture(m_vid_texture, sdlPixFmt, vp->frame->width, vp->frame->height, SDL_BLENDMODE_NONE, 0) < 0)
             return;
         // 更新纹理内容
-        if (upload_texture(m_vid_texture, vp->frame, &is->img_convert_ctx) < 0)
+        if (upload_texture(m_vid_texture.get(), vp->frame, &is->img_convert_ctx) < 0)
             return;
         vp->uploaded = 1;
         vp->flip_v = vp->frame->linesize[0] < 0;
@@ -2032,9 +2032,9 @@ void VideoCtrl::video_image_display(VideoState *is) {
 
         // 保存最后一帧的引用，用于播放结束后重建纹理（av_frame_ref 增加引用计数，保持数据有效）
         if (!m_last_frame)
-            m_last_frame = av_frame_alloc();
-        av_frame_unref(m_last_frame);
-        av_frame_ref(m_last_frame, vp->frame);
+            m_last_frame.reset(av_frame_alloc());
+        av_frame_unref(m_last_frame.get());
+        av_frame_ref(m_last_frame.get(), vp->frame);
 
         if (m_frame_width != vp->frame->width || m_frame_height != vp->frame->height) {
             m_frame_width = vp->frame->width;
@@ -2044,7 +2044,7 @@ void VideoCtrl::video_image_display(VideoState *is) {
         }
     }
     /*mark：无论你图片有多大，我 rect 设置了多大，最后图片显示就是多大，即最后 SDL_RenderCopyEx 会帮我们做等比例缩放处理 */
-    SDL_RenderCopyEx(m_renderer, m_vid_texture, NULL, &rect, 0, NULL, (SDL_RendererFlip)(vp->flip_v ? SDL_FLIP_VERTICAL : 0));
+    SDL_RenderCopyEx(m_renderer, m_vid_texture.get(), NULL, &rect, 0, NULL, (SDL_RendererFlip)(vp->flip_v ? SDL_FLIP_VERTICAL : 0));
 }
 
 void VideoCtrl::calculate_display_rect(SDL_Rect *rect, int src_x_left, int src_y_top, int src_width, int src_height,
@@ -2076,23 +2076,23 @@ void VideoCtrl::calculate_display_rect(SDL_Rect *rect, int src_x_left, int src_y
     rect->h = FFMAX(height, 1);
 }
 
-int VideoCtrl::realloc_texture(SDL_Texture **texture, Uint32 new_format, int new_width, int new_height,
+int VideoCtrl::realloc_texture(SdlTexturePtr &texture, Uint32 new_format, int new_width, int new_height,
                               SDL_BlendMode blend_mode, int init_texture) {
     Uint32 format;
     int access, w, h;
-    if (SDL_QueryTexture(*texture, &format, &access, &w, &h) < 0 || new_width != w || new_height != h || new_format != format) {
+    if (!texture || SDL_QueryTexture(texture.get(), &format, &access, &w, &h) < 0 || new_width != w || new_height != h || new_format != format) {
         void *pixels;
         int pitch;
-        SDL_DestroyTexture(*texture);
-        if (!(*texture = SDL_CreateTexture(m_renderer, new_format, SDL_TEXTUREACCESS_STREAMING, new_width, new_height)))
+        texture.reset(SDL_CreateTexture(m_renderer, new_format, SDL_TEXTUREACCESS_STREAMING, new_width, new_height));
+        if (!texture)
             return -1;
-        if (SDL_SetTextureBlendMode(*texture, blend_mode) < 0)
+        if (SDL_SetTextureBlendMode(texture.get(), blend_mode) < 0)
             return -1;
         if (init_texture) {
-            if (SDL_LockTexture(*texture, NULL, &pixels, &pitch) < 0)
+            if (SDL_LockTexture(texture.get(), NULL, &pixels, &pitch) < 0)
                 return -1;
             memset(pixels, 0, pitch * new_height);
-            SDL_UnlockTexture(*texture);
+            SDL_UnlockTexture(texture.get());
         }
     }
     return 0;
@@ -2553,442 +2553,8 @@ void VideoCtrl::update_speed(float speed) {
 
 // ==================== 音频提取 ====================
 
+
 bool VideoCtrl::OnExtractAudio(const QString &inputFile, const QString &outputFile)
 {
-    AVFormatContext *inFmtCtx = nullptr;
-    AVFormatContext *outFmtCtx = nullptr;
-    int audioIdx = -1;
-    int ret = 0;
-    bool result = false;
-
-    // ── 1. 打开输入文件 ──
-    ret = avformat_open_input(&inFmtCtx, inputFile.toUtf8().constData(), nullptr, nullptr);
-    if (ret < 0) {
-        av_log_error("Extract: cannot open input: %s\n", inputFile.toUtf8().constData());
-        return false;
-    }
-    ret = avformat_find_stream_info(inFmtCtx, nullptr);
-    if (ret < 0) {
-        av_log_error("Extract: cannot find stream info\n");
-        avformat_close_input(&inFmtCtx);
-        return false;
-    }
-
-    // ── 2. 查找音频流 ──
-    audioIdx = av_find_best_stream(inFmtCtx, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
-    if (audioIdx < 0) {
-        av_log_error("Extract: no audio stream found\n");
-        avformat_close_input(&inFmtCtx);
-        return false;
-    }
-    AVStream *inStream = inFmtCtx->streams[audioIdx];
-    AVCodecParameters *inCodecPar = inStream->codecpar;
-
-    av_log_info("Extract: audio codec=%s, sample_rate=%d, channels=%d\n",
-                avcodec_get_name(inCodecPar->codec_id),
-                inCodecPar->sample_rate, inCodecPar->channels);
-
-    // ── 3. 确定输出格式 ──
-    QString ext = QFileInfo(outputFile).suffix().toLower();
-    const AVOutputFormat *outFmt = av_guess_format(nullptr,
-                                                   outputFile.toUtf8().constData(), nullptr);
-    if (!outFmt) {
-        av_log_error("Extract: cannot guess output format for %s\n", ext.toUtf8().constData());
-        avformat_close_input(&inFmtCtx);
-        return false;
-    }
-
-    ret = avformat_alloc_output_context2(&outFmtCtx, nullptr, nullptr,
-                                         outputFile.toUtf8().constData());
-    if (ret < 0 || !outFmtCtx) {
-        av_log_error("Extract: cannot create output context\n");
-        avformat_close_input(&inFmtCtx);
-        return false;
-    }
-
-    // ── 4. 判断能否流拷贝（source codec == output format default codec）──
-    bool canStreamCopy = false;
-    if (outFmt->audio_codec != AV_CODEC_ID_NONE) {
-        canStreamCopy = (inCodecPar->codec_id == outFmt->audio_codec);
-    }
-    // 双重检查：用 avformat_query_codec 确认
-    if (!canStreamCopy) {
-        canStreamCopy = (avformat_query_codec(outFmt, inCodecPar->codec_id,
-                                              FF_COMPLIANCE_NORMAL) == 1);
-    }
-
-    // WAV 一律走转码（生成标准 PCM_S16LE）
-    bool isWav = (ext == "wav");
-
-    if (isWav || !canStreamCopy) {
-        // ═══════════════════════════════════════════
-        // 路径 A：转码（解码 → 重采样 → 编码输出）
-        // ═══════════════════════════════════════════
-
-        // 4a. 创建输入解码器
-        const AVCodec *decoder = avcodec_find_decoder(inCodecPar->codec_id);
-        if (!decoder) {
-            av_log_error("Extract: unsupported audio codec\n");
-            goto cleanup;
-        }
-        AVCodecContext *decCtx = avcodec_alloc_context3(decoder);
-        avcodec_parameters_to_context(decCtx, inCodecPar);
-        ret = avcodec_open2(decCtx, decoder, nullptr);
-        if (ret < 0) {
-            av_log_error("Extract: cannot open decoder\n");
-            avcodec_free_context(&decCtx);
-            goto cleanup;
-        }
-
-        // 4b. 创建输出流
-        AVStream *outStream = avformat_new_stream(outFmtCtx, nullptr);
-        if (!outStream) {
-            avcodec_free_context(&decCtx);
-            goto cleanup;
-        }
-        outStream->time_base = (AVRational){1, decCtx->sample_rate};
-
-        // 4c. 确定输出编码器
-        AVCodecContext *encCtx = nullptr;
-        const AVCodec *encoder = nullptr;
-        bool needEncoder = !isWav;  // WAV 用裸 PCM，不需要编码器
-
-        if (needEncoder) {
-            // 非 WAV 格式：需要用编码器
-            AVCodecID encId = outFmt->audio_codec;
-            if (encId == AV_CODEC_ID_NONE) {
-                // 格式没有默认音频编码器，无法转码
-                av_log_error("Extract: output format %s has no default audio codec\n", ext.toUtf8().constData());
-                avcodec_free_context(&decCtx);
-                goto cleanup;
-            }
-            encoder = avcodec_find_encoder(encId);
-            if (!encoder) {
-                av_log_error("Extract: encoder for %s not available\n", avcodec_get_name(encId));
-                avcodec_free_context(&decCtx);
-                goto cleanup;
-            }
-            encCtx = avcodec_alloc_context3(encoder);
-            encCtx->sample_rate = decCtx->sample_rate;
-            encCtx->channel_layout = decCtx->channel_layout;
-            encCtx->channels = decCtx->channels;
-            encCtx->sample_fmt = encoder->sample_fmts ? encoder->sample_fmts[0]
-                                                      : AV_SAMPLE_FMT_FLTP;
-            encCtx->time_base = (AVRational){1, encCtx->sample_rate};
-            // 允许编码器选择最佳比特率
-            encCtx->bit_rate = 0;
-            if (outFmtCtx->oformat->flags & AVFMT_GLOBALHEADER)
-                encCtx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-
-            ret = avcodec_open2(encCtx, encoder, nullptr);
-            if (ret < 0) {
-                av_log_error("Extract: cannot open encoder\n");
-                avcodec_free_context(&decCtx);
-                avcodec_free_context(&encCtx);
-                goto cleanup;
-            }
-            avcodec_parameters_from_context(outStream->codecpar, encCtx);
-        } else {
-            // WAV: 直接输出 PCM S16LE
-            outStream->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
-            outStream->codecpar->codec_id = AV_CODEC_ID_PCM_S16LE;
-            outStream->codecpar->sample_rate = decCtx->sample_rate;
-            outStream->codecpar->channel_layout = decCtx->channel_layout;
-            outStream->codecpar->channels = decCtx->channels;
-            outStream->codecpar->format = AV_SAMPLE_FMT_S16;
-            outStream->codecpar->block_align = 2 * decCtx->channels;
-            outStream->codecpar->bits_per_coded_sample = 16;
-        }
-
-        // 4d. 创建重采样器：输入格式 → 输出格式
-        SwrContext *swrCtx = nullptr;
-        {
-            AVSampleFormat outSampleFmt = isWav ? AV_SAMPLE_FMT_S16
-                                                : encCtx->sample_fmt;
-            int outSampleRate = decCtx->sample_rate;
-            int64_t outChLayout = decCtx->channel_layout;
-            int outChannels = decCtx->channels;
-
-            swrCtx = swr_alloc_set_opts(nullptr,
-                                        outChLayout, outSampleFmt, outSampleRate,
-                                        decCtx->channel_layout, decCtx->sample_fmt, decCtx->sample_rate,
-                                        0, nullptr);
-            if (!swrCtx || swr_init(swrCtx) < 0) {
-                av_log_error("Extract: cannot create resampler\n");
-                swr_free(&swrCtx);
-                avcodec_free_context(&decCtx);
-                if (encCtx) avcodec_free_context(&encCtx);
-                goto cleanup;
-            }
-        }
-
-        // 4e. 打开输出文件 + 写文件头
-        if (!(outFmtCtx->oformat->flags & AVFMT_NOFILE)) {
-            ret = avio_open(&outFmtCtx->pb, outputFile.toUtf8().constData(),
-                            AVIO_FLAG_WRITE);
-            if (ret < 0) {
-                av_log_error("Extract: cannot open output file\n");
-                swr_free(&swrCtx);
-                avcodec_free_context(&decCtx);
-                if (encCtx) avcodec_free_context(&encCtx);
-                goto cleanup;
-            }
-        }
-        ret = avformat_write_header(outFmtCtx, nullptr);
-        if (ret < 0) {
-            av_log_error("Extract: cannot write header\n");
-            swr_free(&swrCtx);
-            avcodec_free_context(&decCtx);
-            if (encCtx) avcodec_free_context(&encCtx);
-            goto cleanup;
-        }
-
-        // 4f. 主循环：读包 → 解码 → 重采样 → 编码 → 写输出
-        AVPacket *inPkt = av_packet_alloc();
-        AVFrame *decFrame = av_frame_alloc();
-        int64_t outPts = 0;
-
-        while (av_read_frame(inFmtCtx, inPkt) >= 0) {
-            if (inPkt->stream_index != audioIdx) {
-                av_packet_unref(inPkt);
-                continue;
-            }
-
-            ret = avcodec_send_packet(decCtx, inPkt);
-            if (ret < 0) {
-                av_packet_unref(inPkt);
-                continue;
-            }
-
-            while (ret >= 0) {
-                ret = avcodec_receive_frame(decCtx, decFrame);
-                if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) break;
-                if (ret < 0) break;
-
-                // 计算重采样输出样本数
-                int dstNbSamples = av_rescale_rnd(
-                    swr_get_delay(swrCtx, decCtx->sample_rate) + decFrame->nb_samples,
-                    decCtx->sample_rate, decCtx->sample_rate, AV_ROUND_UP);
-
-                // 分配输出缓冲区
-                AVFrame *outFrame = av_frame_alloc();
-                outFrame->nb_samples = dstNbSamples;
-                outFrame->channel_layout = isWav ? decCtx->channel_layout
-                                                 : encCtx->channel_layout;
-                outFrame->sample_rate = decCtx->sample_rate;
-                outFrame->format = isWav ? AV_SAMPLE_FMT_S16 : encCtx->sample_fmt;
-                av_frame_get_buffer(outFrame, 0);
-
-                // 重采样
-                int actualSamples = swr_convert(
-                    swrCtx,
-                    outFrame->data, dstNbSamples,
-                    (const uint8_t **)decFrame->data, decFrame->nb_samples);
-                if (actualSamples < 0) {
-                    av_frame_free(&outFrame);
-                    continue;
-                }
-                outFrame->nb_samples = actualSamples;
-
-                if (isWav) {
-                    // ── WAV：直接写 PCM 包 ──
-                    AVPacket *outPkt = av_packet_alloc();
-                    outPkt->data = nullptr;   // 让 av_packet_from_data 不接管内存
-                    outPkt->size = 0;
-
-                    int bufSize = av_samples_get_buffer_size(
-                        nullptr, outFrame->channels,
-                        outFrame->nb_samples, AV_SAMPLE_FMT_S16, 1);
-
-                    // 复制数据到包（避免 double-free）
-                    uint8_t *pktData = (uint8_t *)av_malloc(bufSize);
-                    memcpy(pktData, outFrame->data[0], bufSize);
-
-                    av_packet_from_data(outPkt, pktData, bufSize);
-                    outPkt->stream_index = 0;
-                    outPkt->pts = outPts;
-                    outPkt->dts = outPts;
-                    outPts += outFrame->nb_samples;
-
-                    av_interleaved_write_frame(outFmtCtx, outPkt);
-                    av_packet_free(&outPkt);  // 内部会 av_free pktData
-                } else {
-                    // ── 编码路径 ──
-                    outFrame->pts = outPts;
-                    outPts += outFrame->nb_samples;
-
-                    ret = avcodec_send_frame(encCtx, outFrame);
-                    if (ret < 0) {
-                        av_frame_free(&outFrame);
-                        continue;
-                    }
-                    while (ret >= 0) {
-                        AVPacket *outPkt = av_packet_alloc();
-                        ret = avcodec_receive_packet(encCtx, outPkt);
-                        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
-                            av_packet_free(&outPkt);
-                            break;
-                        }
-                        if (ret < 0) {
-                            av_packet_free(&outPkt);
-                            break;
-                        }
-                        outPkt->stream_index = 0;
-                        av_packet_rescale_ts(outPkt, encCtx->time_base,
-                                             outStream->time_base);
-                        av_interleaved_write_frame(outFmtCtx, outPkt);
-                        av_packet_free(&outPkt);
-                    }
-                }
-                av_frame_free(&outFrame);
-            }
-            av_packet_unref(inPkt);
-        }
-
-        // 4g. 冲刷解码器 → 编码器
-        avcodec_send_packet(decCtx, nullptr);
-        while (true) {
-            ret = avcodec_receive_frame(decCtx, decFrame);
-            if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) break;
-            if (ret < 0) break;
-            // 重采样并编码最后的帧
-            int dstNbSamples = av_rescale_rnd(
-                swr_get_delay(swrCtx, decCtx->sample_rate) + decFrame->nb_samples,
-                decCtx->sample_rate, decCtx->sample_rate, AV_ROUND_UP);
-            AVFrame *outFrame = av_frame_alloc();
-            outFrame->nb_samples = dstNbSamples;
-            outFrame->channel_layout = isWav ? decCtx->channel_layout
-                                             : encCtx->channel_layout;
-            outFrame->sample_rate = decCtx->sample_rate;
-            outFrame->format = isWav ? AV_SAMPLE_FMT_S16 : encCtx->sample_fmt;
-            av_frame_get_buffer(outFrame, 0);
-            int actualSamples = swr_convert(swrCtx, outFrame->data, dstNbSamples,
-                                            (const uint8_t **)decFrame->data,
-                                            decFrame->nb_samples);
-            if (actualSamples > 0) {
-                outFrame->nb_samples = actualSamples;
-                if (isWav) {
-                    int bufSize = av_samples_get_buffer_size(
-                        nullptr, outFrame->channels,
-                        outFrame->nb_samples, AV_SAMPLE_FMT_S16, 1);
-                    AVPacket *outPkt = av_packet_alloc();
-                    uint8_t *pktData = (uint8_t *)av_malloc(bufSize);
-                    memcpy(pktData, outFrame->data[0], bufSize);
-                    av_packet_from_data(outPkt, pktData, bufSize);
-                    outPkt->stream_index = 0;
-                    outPkt->pts = outPts;
-                    outPkt->dts = outPts;
-                    outPts += outFrame->nb_samples;
-                    av_interleaved_write_frame(outFmtCtx, outPkt);
-                    av_packet_free(&outPkt);
-                } else {
-                    outFrame->pts = outPts;
-                    outPts += outFrame->nb_samples;
-                    avcodec_send_frame(encCtx, outFrame);
-                }
-            }
-            av_frame_free(&outFrame);
-        }
-
-        // 冲刷编码器（如果不是 WAV）
-        if (!isWav && encCtx) {
-            avcodec_send_frame(encCtx, nullptr);
-            while (true) {
-                AVPacket *outPkt = av_packet_alloc();
-                ret = avcodec_receive_packet(encCtx, outPkt);
-                if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
-                    av_packet_free(&outPkt);
-                    break;
-                }
-                if (ret < 0) {
-                    av_packet_free(&outPkt);
-                    break;
-                }
-                outPkt->stream_index = 0;
-                av_packet_rescale_ts(outPkt, encCtx->time_base,
-                                     outStream->time_base);
-                av_interleaved_write_frame(outFmtCtx, outPkt);
-                av_packet_free(&outPkt);
-            }
-        }
-
-        // 写文件尾
-        av_write_trailer(outFmtCtx);
-
-        // 清理
-        av_packet_free(&inPkt);
-        av_frame_free(&decFrame);
-        swr_free(&swrCtx);
-        avcodec_free_context(&decCtx);
-        if (encCtx) avcodec_free_context(&encCtx);
-
-        result = true;
-        av_log_info("Extract (transcode): %s -> %s done\n",
-                    inputFile.toUtf8().constData(),
-                    outputFile.toUtf8().constData());
-
-    } else {
-        // ═══════════════════════════════════════════
-        // 路径 B：流拷贝（快速，无损，源格式 = 目标格式）
-        // ═══════════════════════════════════════════
-
-        AVStream *outStream = avformat_new_stream(outFmtCtx, nullptr);
-        if (!outStream) goto cleanup;
-
-        ret = avcodec_parameters_copy(outStream->codecpar, inCodecPar);
-        if (ret < 0) {
-            av_log_error("Extract: cannot copy codec params\n");
-            goto cleanup;
-        }
-        outStream->codecpar->codec_tag = 0;
-        outStream->time_base = inStream->time_base;
-
-        // 打开输出文件
-        if (!(outFmtCtx->oformat->flags & AVFMT_NOFILE)) {
-            ret = avio_open(&outFmtCtx->pb, outputFile.toUtf8().constData(),
-                            AVIO_FLAG_WRITE);
-            if (ret < 0) {
-                av_log_error("Extract: cannot open output file\n");
-                goto cleanup;
-            }
-        }
-
-        // 写文件头
-        ret = avformat_write_header(outFmtCtx, nullptr);
-        if (ret < 0) {
-            av_log_error("Extract: cannot write header\n");
-            goto cleanup;
-        }
-
-        // 复制音频包
-        AVPacket pkt;
-        while (av_read_frame(inFmtCtx, &pkt) >= 0) {
-            if (pkt.stream_index == audioIdx) {
-                av_packet_rescale_ts(&pkt, inStream->time_base,
-                                     outStream->time_base);
-                pkt.stream_index = outStream->index;
-                av_interleaved_write_frame(outFmtCtx, &pkt);
-            }
-            av_packet_unref(&pkt);
-        }
-
-        // 写文件尾
-        av_write_trailer(outFmtCtx);
-
-        result = true;
-        av_log_info("Extract (stream copy): %s -> %s done\n",
-                    inputFile.toUtf8().constData(),
-                    outputFile.toUtf8().constData());
-    }
-
-cleanup:
-    // ── 6. 统一清理 ──
-    if (outFmtCtx) {
-        if (!(outFmtCtx->oformat->flags & AVFMT_NOFILE) && outFmtCtx->pb)
-            avio_closep(&outFmtCtx->pb);
-        avformat_free_context(outFmtCtx);
-    }
-    avformat_close_input(&inFmtCtx);
-
-    return result;
+    return m_audio_extraction_service.extract(inputFile, outputFile);
 }

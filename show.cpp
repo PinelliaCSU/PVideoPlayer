@@ -6,7 +6,7 @@
 #include <QPropertyAnimation>
 #include <QGraphicsOpacityEffect>
 #include "guiutils.h"
-#include "videoctrl.h"
+#include "playbackservice.h"
 
 
 extern QMutex g_show_rect_mutex;
@@ -61,6 +61,11 @@ bool Show::Init(){
     return true;
 }
 
+void Show::SetPlaybackService(PlaybackService *service)
+{
+    _playback_service = service;
+}
+
 void Show::OnPlay(QString strFile){
     // 防御性编程
     if(strFile.isEmpty()) {
@@ -68,7 +73,11 @@ void Show::OnPlay(QString strFile){
         return;
     }
     //    todo：在这里或者在其他地方必须校验必须是可播放的视频文件，而且当前文件得存在，不能突然被删除了。防止打开失败导致程序崩溃
-    VideoCtrl::GetInstance()->start_play(strFile, ui->label->winId());
+    if (_playback_service == nullptr) {
+        qWarning() << "Show::OnPlay: playback service is not configured";
+        return;
+    }
+    _playback_service->start(strFile, ui->label->winId());
 }
 
 

@@ -3,6 +3,7 @@
 
 #define __STDC_CONSTANT_MACROS
 #include <thread>
+#include "media_raii.h"
 
 extern "C"{
 #include <libavcodec/avcodec.h>
@@ -160,6 +161,7 @@ typedef struct Decoder {
     AVPacket pkt_temp;
     PacketQueue *queue;
     AVCodecContext *avctx;
+    AvCodecContextPtr owned_avctx;
     int pkt_serial;
     int finished;
     int packet_pending;
@@ -186,6 +188,7 @@ typedef struct VideoState {
     int64_t seek_rel;
     int read_pause_return;
     AVFormatContext *ic;
+    AvFormatContextPtr owned_ic;
     int realtime;
 
     Clock audclk;
@@ -443,7 +446,13 @@ static int packet_queue_get(PacketQueue *q, AVPacket *pkt, int block, int *seria
 
 //解码器初始化（绑定解码结构体、数据包队列、信号量，初始化pts）
 static void decoder_init(Decoder *d, AVCodecContext *avctx, PacketQueue *queue, SDL_cond *empty_queue_cond) {
-    memset(d, 0, sizeof(Decoder));
+    av_packet_unref(&d->pkt);
+    av_packet_unref(&d->pkt_temp);
+    d->pkt = AVPacket{};
+    d->pkt_temp = AVPacket{};
+    d->pkt_serial = 0;
+    d->finished = 0;
+    d->packet_pending = 0;
     d->avctx = avctx;
     d->queue = queue;
     d->empty_queue_cond = empty_queue_cond;
@@ -664,7 +673,8 @@ static int decoder_decode_frame(Decoder *d, AVFrame *frame, AVSubtitle *sub) {
 //解码器销毁
 static void decoder_destroy(Decoder *d) {
     av_packet_unref(&d->pkt);
-    avcodec_free_context(&d->avctx);
+    d->owned_avctx.reset();
+    d->avctx = nullptr;
 }
 
 static void frame_queue_unref_item(Frame *vp)

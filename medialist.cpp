@@ -29,7 +29,10 @@ bool MediaList::Init(){
     //    添加信号槽
     connect(&_act_add_file, &QAction::triggered, this, &MediaList::addFile);
     connect(&_act_remove_file, &QAction::triggered, this, &MediaList::removeFile);
-    connect(&_act_clear_list, &QAction::triggered, this, &QListWidget::clear);
+    connect(&_act_clear_list, &QAction::triggered, this, [this]() {
+        emit SigClearList();
+        clear();
+    });
     return true;
 
 }
@@ -74,5 +77,10 @@ void MediaList::addFile()
 
 void MediaList::removeFile()
 {
-    takeItem(currentRow());
+    const int row = currentRow();
+    if (row < 0) {
+        return;
+    }
+    emit SigRemoveFile(row);
+    takeItem(row);
 }

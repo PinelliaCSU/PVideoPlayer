@@ -380,3 +380,69 @@ Adapters (FFmpegBackend, SDLAudioSink, SDLVideoSink, QSettingsRepository)
 当前项目已经具备一个功能完整度较高的传统桌面播放器原型，底层 FFmpeg/SDL 管线也提供了进一步实现高级播放能力的基础。短板不在“缺少一个新的 UI 框架”，而在于播放核心、线程、渲染和应用业务集中于少数全局对象，且缺乏稳定的领域模型和接口边界。
 
 最优策略是：**先稳定线程和生命周期，再抽取领域/应用服务边界，随后隔离 FFmpeg/SDL，最后再做硬件加速和插件化。** 这样可以在保持当前可播放能力的同时，以增量方式降低技术债，避免一次性重写带来的功能回退和不可控迁移成本。
+
+## 12. 已落地的第一阶段改造
+
+截至当前版本，以下改造已经完成并通过 Qt 6.7.2 MinGW Release 构建：
+
+- 新增 `PlaybackService`，作为 UI 与 `VideoCtrl` 之间的应用服务边界；
+- 新增 `MediaItem`、`PlaybackState` 和 `PlaybackStatus` 值对象；
+- 播放错误通过结构化信号向 UI 传播；
+- 移除 UI 播放状态连接中的显式 `DirectConnection`；
+- 新增 `PlaylistModel`，并将播放列表事实数据从 `QListWidgetItem` 迁移到模型；
+- 新增 `ISettingsRepository`/`QSettingsRepository`；
+- 配置文件从临时目录迁移至 Qt 标准应用配置目录；
+- 播放列表添加、删除、清空、持久化和播放切换统一基于模型。
+
+尚未完成的后续高风险改造仍包括 `VideoCtrl` 内部的解码/时钟/音频/视频输出拆分、FFmpeg/SDL 全量 RAII 化、命令串行化、多会话支持和自动化测试。后续应继续采用兼容适配器和小步构建验证，不建议直接替换整个播放核心。
+
+## 13. 播放核心迁移边界（当前阶段）
+
+为降低高风险核心重构的迁移风险，当前已先完成以下边界建设：
+
+- `PlaybackEventSource` 统一播放事件信号，真实 `VideoCtrl` 与 fake backend 共用同一事件协议；
+- `IPlaybackBackend` 统一播放控制命令，应用层不再依赖 FFmpeg/SDL 类型；
+- `PlaybackService::enqueue()` 将跨线程播放命令投递到服务对象所属线程，保证命令在单一执行上下文中串行执行；
+- `PlaybackService` 增加销毁期命令闸门，避免服务销毁后继续接受异步命令；
+- 新增 `media_raii.h`，为 FFmpeg 格式上下文、编解码上下文、帧/包以及 SDL 窗口、渲染器、纹理提供 `std::unique_ptr` deleter 类型；
+- 新增 fake backend 和 QtTest，覆盖命令转发、状态变化、空地址错误以及跨线程命令排队；
+- 主工程和独立测试工程均已使用 Qt 6.7.2 MinGW 工具链验证通过。
+
+这些改造目前属于“兼容外壳”和资源管理基础设施，`VideoCtrl` 内部的解封装、解码、时钟、音频输出、视频输出和音频提取仍未完成物理拆分。下一步应按音频提取、时钟、视频输出、音频输出、解码管线的顺序逐步抽取，并在每一步保留 `VideoCtrl` façade 和对应测试。
+
+## 14. 当前增量：时钟控制器与纹理资源所有权
+
+本阶段继续完成了两个低风险、可独立验证的物理迁移：
+
+- 新增 `ClockController`，集中管理时钟初始化、设置、倍速变化和读取；
+- `VideoCtrl` 保留兼容方法，但时钟算法已委托给 `ClockController`，后续音视频解码器不需要再依赖 `VideoCtrl` 的时钟实现；
+- `m_vid_texture` 已改为 `SdlTexturePtr`，纹理释放、重建和上传路径统一通过 RAII 所有权管理；
+- `m_last_frame` 已改为 `AvFramePtr`，结束播放、用户停止和纹理重建路径不再手工释放该帧；
+- RAII 基础设施补充 SDL mutex/condition、SwsContext 和 SwrContext deleter；
+- 主工程使用 Qt 6.7.2 MinGW Release 构建验证通过。
+
+尚未完成的部分仍需按模块逐步迁移，尤其是 `VideoState` 内部的格式上下文、编解码上下文、帧队列和 SDL 音频设备。由于这些对象跨线程共享，不能仅替换指针类型，必须先明确线程停止顺序和队列所有权，再进行 RAII 化。
+
+## 15. 当前增量：管线组件、音频提取和会话扩展
+
+本阶段新增并接入了以下基础能力：
+
+- `AudioExtractionService`：音频提取实现已从 `VideoCtrl` 移出，保留原有流拷贝、解码、重采样和编码输出路径；
+- `DemuxReader`：独立封装 FFmpeg 输入打开、流信息探测、读包、定位和关闭；
+- `DecoderComponent`：独立封装编解码器上下文的创建、打开、发送包、接收帧和关闭；
+- `HardwareDecoderDevice`：提供 FFmpeg 硬件设备上下文的 RAII 初始化入口，具体硬件像素格式和解码器选择仍需按平台接入；
+- `AudioOutputDevice`：统一 SDL 音频设备打开、暂停和关闭，已接入 `VideoCtrl` 音频输出路径；
+- `VideoOutputResources`：独立管理视频纹理资源，作为现有视频输出拆分的资源边界；
+- `FilterChain`：建立 FFmpeg filter graph 的独立边界；
+- `SubtitlePluginRegistry`：建立字幕 provider 插件协议；
+- `PlaybackSessionManager`：支持多个独立 `PlaybackService` 会话，并增加独立会话生命周期测试；
+- `VideoState` 的格式上下文、解码器上下文和顶层对象生命周期已开始使用 RAII/正确 C++ 构造析构，修复了原先对含 `std::thread` 的对象使用 `av_mallocz` 的未定义行为；
+- 解码线程退出时增加 `joinable()` 防护，资源释放顺序为停止读取线程、停止解码器、关闭音频输出、销毁队列和释放格式上下文。
+
+当前仍需继续完成的接入工作：
+
+- 将 `DemuxReader` 和 `DecoderComponent` 直接替换 `VideoCtrl::read_thread`、`audio_thread`、`video_thread` 的旧函数；
+- 将 `VideoOutputResources` 完整接管窗口、渲染器、纹理和渲染循环；
+- 将 `SwrContext`、`SwsContext`、SDL mutex/condition 逐个从 `VideoState` 裸字段迁移到所有权对象；
+- 为硬件解码、滤镜链和字幕插件提供真实播放会话配置及平台实现，而不仅是接口；
+- 将 `PlaybackSessionManager` 接入主窗口/播放列表，当前它已经支持多会话对象管理，但默认 UI 仍使用兼容的单实例后端。

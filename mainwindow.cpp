@@ -9,6 +9,7 @@
 #include "configutils.h"
 #include <QShortcut>
 #include "videoctrl.h"
+#include "playbackservice.h"
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -16,7 +17,10 @@ MainWindow::MainWindow(QWidget *parent)
     _playlist(this),
     _title(this),
     _move_drag(false),
-    _menu(this)
+    _menu(this),
+    _playback_service(new PlaybackService(VideoCtrl::GetInstance(),
+                                          VideoCtrl::GetInstance(),
+                                          this))
 {
     ui->setupUi(this);
     setWindowFlags(Qt::FramelessWindowHint);
@@ -47,6 +51,7 @@ bool MainWindow::Init()
         return false;
     }
 
+    ui->show->SetPlaybackService(_playback_service);
     initMenu();
 
     connectSignalSlots();
@@ -106,26 +111,26 @@ void MainWindow::connectSignalSlots(){
     // Show窗口: ESC退出全屏（其他快捷键已通过MainWindow全局QAction处理，ApplicationShortcut全屏时也生效）
     connect(ui->show, &Show::SigExitFullScreen, this, &MainWindow::SlotOnFullScreenBtnClicked);
     // 点击视频画面切换播放/暂停
-    connect(ui->show, &Show::SigTogglePlay, VideoCtrl::GetInstance(), &VideoCtrl::OnPause);
+    connect(ui->show, &Show::SigTogglePlay, _playback_service, &PlaybackService::pause);
 
     // MainWindow全局QAction快捷键功能（ApplicationShortcut，全屏时也生效）
-    connect(this, &MainWindow::SigSeekForward, VideoCtrl::GetInstance(), &VideoCtrl::OnSeekForward);
-    connect(this, &MainWindow::SigSeekBack, VideoCtrl::GetInstance(), &VideoCtrl::OnSeekBack);
-    connect(this, &MainWindow::SigAddVolume, VideoCtrl::GetInstance(), &VideoCtrl::OnAddVolume);
-    connect(this, &MainWindow::SigSubVolume, VideoCtrl::GetInstance(), &VideoCtrl::OnSubVolume);
-    connect(this, &MainWindow::SigPlayOrPause, VideoCtrl::GetInstance(), &VideoCtrl::OnPause);
-    connect(this, &MainWindow::SigStep, VideoCtrl::GetInstance(), &VideoCtrl::OnStep);
+    connect(this, &MainWindow::SigSeekForward, _playback_service, &PlaybackService::seekForward);
+    connect(this, &MainWindow::SigSeekBack, _playback_service, &PlaybackService::seekBack);
+    connect(this, &MainWindow::SigAddVolume, _playback_service, &PlaybackService::addVolume);
+    connect(this, &MainWindow::SigSubVolume, _playback_service, &PlaybackService::subVolume);
+    connect(this, &MainWindow::SigPlayOrPause, _playback_service, &PlaybackService::pause);
+    connect(this, &MainWindow::SigStep, _playback_service, &PlaybackService::step);
 
     //    状态控制栏的按钮功能
     connect(ui->ctrlBar, &CtrlBar::SigPlayListCtlBtnClicked, this, &MainWindow::SlotOnPlayListCtrlBtnClicked);
     connect(ui->ctrlBar, &CtrlBar::SigBackBtnClicked, &_playlist, &Playlist::SlotOnBackPlay);
     connect(ui->ctrlBar, &CtrlBar::SigNextBtnClicked, &_playlist, &Playlist::SlotOnNextPlay);
-    connect(ui->ctrlBar, &CtrlBar::SigSpeedChanged, VideoCtrl::GetInstance(), &VideoCtrl::OnSetSpeed);
-    connect(ui->ctrlBar, &CtrlBar::SigPlayOrPause, VideoCtrl::GetInstance(), &VideoCtrl::OnPause);
-    connect(ui->ctrlBar, &CtrlBar::SigStop, VideoCtrl::GetInstance(), &VideoCtrl::OnUserStop);
+    connect(ui->ctrlBar, &CtrlBar::SigSpeedChanged, _playback_service, &PlaybackService::setSpeed);
+    connect(ui->ctrlBar, &CtrlBar::SigPlayOrPause, _playback_service, &PlaybackService::pause);
+    connect(ui->ctrlBar, &CtrlBar::SigStop, _playback_service, &PlaybackService::userStop);
 
-    connect(ui->ctrlBar, &CtrlBar::SigPlayVolume, VideoCtrl::GetInstance(), &VideoCtrl::OnPlayVolume);
-    connect(ui->ctrlBar, &CtrlBar::SigPlaySeek, VideoCtrl::GetInstance(), &VideoCtrl::OnPlaySeek);
+    connect(ui->ctrlBar, &CtrlBar::SigPlayVolume, _playback_service, &PlaybackService::setVolume);
+    connect(ui->ctrlBar, &CtrlBar::SigPlaySeek, _playback_service, &PlaybackService::seek);
     connect(ui->ctrlBar, &CtrlBar::SigShowToast, ui->show, &Show::ShowToast);
     // 提取音频
     connect(ui->ctrlBar, &CtrlBar::SigExtractAudio, this, &MainWindow::SlotOnExtractAudio);
@@ -135,8 +140,8 @@ void MainWindow::connectSignalSlots(){
     connect(ui->ctrlBar, &CtrlBar::SigAlwaysOnTopToggled, this, &MainWindow::SlotOnAlwaysOnTopToggled);
 
     // 快捷键操作后显示 Toast（通过 VideoCtrl 的状态信号）
-    connect(VideoCtrl::GetInstance(), &VideoCtrl::SigSeekForwardCompleted, ui->ctrlBar, &CtrlBar::OnSeekForward);
-    connect(VideoCtrl::GetInstance(), &VideoCtrl::SigSeekBackCompleted, ui->ctrlBar, &CtrlBar::OnSeekBack);
+    connect(_playback_service, &PlaybackService::seekForwardCompleted, ui->ctrlBar, &CtrlBar::OnSeekForward);
+    connect(_playback_service, &PlaybackService::seekBackCompleted, ui->ctrlBar, &CtrlBar::OnSeekBack);
 
 
     /*
@@ -148,30 +153,31 @@ void MainWindow::connectSignalSlots(){
      * 使用 QueuedConnection 是因为双方不在同一个线程，防止出现数据竞争或者崩溃，故直接丢给将当前方法丢给接受者线程执行。相当于观察者模式，在 receiver 线程执行 sender.signal，执行完成后 notify 当前线程执行 slot 方法
      *
      */
-    connect(VideoCtrl::GetInstance(), &VideoCtrl::SigStartPlay, this, &MainWindow::SlotOnBeforeNewPlay, Qt::DirectConnection);
-    connect(VideoCtrl::GetInstance(), &VideoCtrl::SigStartPlay, &_title, &Title::SlotOnPlay, Qt::DirectConnection);
-    connect(VideoCtrl::GetInstance(), &VideoCtrl::SigStartPlay, ui->show, &Show::OnStartPlay, Qt::DirectConnection);
-    connect(VideoCtrl::GetInstance(), &VideoCtrl::SigSpeed, ui->ctrlBar, &CtrlBar::OnSpeed);
-    connect(VideoCtrl::GetInstance(), &VideoCtrl::SigPauseStat, ui->ctrlBar, &CtrlBar::OnPauseStat, Qt::QueuedConnection);
-    connect(VideoCtrl::GetInstance(), &VideoCtrl::SigStopFinished, ui->ctrlBar, &CtrlBar::OnStopFinished, Qt::QueuedConnection);
+    connect(_playback_service, &PlaybackService::started, this, &MainWindow::SlotOnBeforeNewPlay);
+    connect(_playback_service, &PlaybackService::started, &_title, &Title::SlotOnPlay);
+    connect(_playback_service, &PlaybackService::started, ui->show, &Show::OnStartPlay);
+    connect(_playback_service, &PlaybackService::speedChanged, ui->ctrlBar, &CtrlBar::OnSpeed);
+    connect(_playback_service, &PlaybackService::pauseChanged, ui->ctrlBar, &CtrlBar::OnPauseStat);
+    connect(_playback_service, &PlaybackService::finished, ui->ctrlBar, &CtrlBar::OnStopFinished);
     // 视频播放完毕后自动播放下一个
-    connect(VideoCtrl::GetInstance(), &VideoCtrl::SigStopFinished, &_playlist, &Playlist::SlotOnNextPlay, Qt::QueuedConnection);
-    connect(VideoCtrl::GetInstance(), &VideoCtrl::SigStopFinished, this, &MainWindow::SlotOnSavePlaybackPosition, Qt::QueuedConnection);
+    connect(_playback_service, &PlaybackService::finished, &_playlist, &Playlist::SlotOnNextPlay);
+    connect(_playback_service, &PlaybackService::finished, this, &MainWindow::SlotOnSavePlaybackPosition);
 
-    connect(VideoCtrl::GetInstance(), &VideoCtrl::SigUserStopFinished, ui->ctrlBar, &CtrlBar::OnUserStopFinished, Qt::QueuedConnection);
-    connect(VideoCtrl::GetInstance(), &VideoCtrl::SigUserStopFinished, &_title, &Title::SlotOnStop, Qt::QueuedConnection);
+    connect(_playback_service, &PlaybackService::userStopped, ui->ctrlBar, &CtrlBar::OnUserStopFinished);
+    connect(_playback_service, &PlaybackService::userStopped, &_title, &Title::SlotOnStop);
     // 用户主动停止时也保存播放位置
-    connect(VideoCtrl::GetInstance(), &VideoCtrl::SigUserStopFinished, this, &MainWindow::SlotOnSavePlaybackPosition, Qt::QueuedConnection);
+    connect(_playback_service, &PlaybackService::userStopped, this, &MainWindow::SlotOnSavePlaybackPosition);
 
-    connect(VideoCtrl::GetInstance(), &VideoCtrl::SigVideoTotalSeconds, ui->ctrlBar, &CtrlBar::OnVideoTotalSeconds, Qt::QueuedConnection);
-    connect(VideoCtrl::GetInstance(), &VideoCtrl::SigVideoTotalSeconds, this, &MainWindow::SlotOnCacheTotalSeconds, Qt::QueuedConnection);
-    connect(VideoCtrl::GetInstance(), &VideoCtrl::SigVideoPlaySeconds, ui->ctrlBar, &CtrlBar::OnVideoPlaySeconds, Qt::QueuedConnection);
-    connect(VideoCtrl::GetInstance(), &VideoCtrl::SigVideoPlaySeconds, this, &MainWindow::SlotOnCachePlaySeconds, Qt::QueuedConnection);
+    connect(_playback_service, &PlaybackService::totalSecondsChanged, ui->ctrlBar, &CtrlBar::OnVideoTotalSeconds);
+    connect(_playback_service, &PlaybackService::totalSecondsChanged, this, &MainWindow::SlotOnCacheTotalSeconds);
+    connect(_playback_service, &PlaybackService::positionSecondsChanged, ui->ctrlBar, &CtrlBar::OnVideoPlaySeconds);
+    connect(_playback_service, &PlaybackService::positionSecondsChanged, this, &MainWindow::SlotOnCachePlaySeconds);
     // 视频开始播放后检查是否需要续播
-    connect(VideoCtrl::GetInstance(), &VideoCtrl::SigVideoTotalSeconds, this, &MainWindow::SlotOnCheckResume, Qt::QueuedConnection);
+    connect(_playback_service, &PlaybackService::totalSecondsChanged, this, &MainWindow::SlotOnCheckResume);
 
-    connect(VideoCtrl::GetInstance(), &VideoCtrl::SigVideoVolume, ui->ctrlBar, &CtrlBar::OnVolumeChanged);
-    connect(VideoCtrl::GetInstance(), &VideoCtrl::SigFrameDimensionsChanged, ui->show, &Show::OnFrameDimensionsChanged, Qt::QueuedConnection);
+    connect(_playback_service, &PlaybackService::volumeChanged, ui->ctrlBar, &CtrlBar::OnVolumeChanged);
+    connect(_playback_service, &PlaybackService::frameDimensionsChanged, ui->show, &Show::OnFrameDimensionsChanged);
+    connect(_playback_service, &PlaybackService::errorOccurred, ui->show, &Show::ShowToast);
 
 }
 
@@ -294,7 +300,7 @@ void MainWindow::initMenu(){
                 QTimer::singleShot(500, this, [this, savedPos]() {
                     if (_cached_total_seconds > 0 && savedPos > 0) {
                         double percent = (double)savedPos / _cached_total_seconds;
-                        VideoCtrl::GetInstance()->OnPlaySeek(percent);
+                        _playback_service->seek(percent);
                     }
                 });
             });
@@ -438,7 +444,7 @@ void MainWindow::SlotOnExtractAudio()
     QApplication::processEvents();
 
     // 调用 VideoCtrl 执行提取（同步）
-    bool ok = VideoCtrl::GetInstance()->OnExtractAudio(inputFile, outputFile);
+    bool ok = _playback_service->extractAudio(inputFile, outputFile);
 
     if (ok)
         ui->show->ShowToast("音频提取完成！");
@@ -534,7 +540,7 @@ void MainWindow::SlotOnCheckResume(int totalSeconds)
     if (reply == QMessageBox::Yes) {
         // 用百分比 seek（VideoCtrl::OnPlaySeek 接受 0.0~1.0 的百分比）
         double percent = (double)savedPos / _cached_total_seconds;
-        VideoCtrl::GetInstance()->OnPlaySeek(percent);
+        _playback_service->seek(percent);
     }
 }
 
