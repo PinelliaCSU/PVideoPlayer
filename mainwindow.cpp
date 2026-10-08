@@ -31,6 +31,13 @@ MainWindow::MainWindow(PlaybackEventSource *events, IPlaybackBackend *backend, Q
     this->setWindowIcon(QIcon(":/res/icon.png"));
     setStyleSheet(GuiUtils::LoadQss(":/res/qss/mainwid.css"));
     this->setMouseTracking(true);
+    _control_bar_hide_timer.setSingleShot(true);
+    _control_bar_hide_timer.setInterval(3000);
+    connect(&_control_bar_hide_timer, &QTimer::timeout, this, [this]() {
+        if (_is_playing) {
+            ui->ctrlBar->hide();
+        }
+    });
 }
 
 MainWindow::~MainWindow()
@@ -116,6 +123,8 @@ void MainWindow::connectSignalSlots(){
     connect(ui->show, &Show::SigExitFullScreen, this, &MainWindow::SlotOnFullScreenBtnClicked);
     // 点击视频画面切换播放/暂停
     connect(ui->show, &Show::SigTogglePlay, _playback_service, &PlaybackService::pause);
+    connect(ui->show, &Show::SigUserInteraction, this, &MainWindow::ShowControlBar);
+    connect(ui->ctrlBar, &CtrlBar::SigUserInteraction, this, &MainWindow::ShowControlBar);
 
     // MainWindow全局QAction快捷键功能（ApplicationShortcut，全屏时也生效）
     connect(this, &MainWindow::SigSeekForward, _playback_service, &PlaybackService::seekForward);
@@ -157,17 +166,33 @@ void MainWindow::connectSignalSlots(){
      * 使用 QueuedConnection 是因为双方不在同一个线程，防止出现数据竞争或者崩溃，故直接丢给将当前方法丢给接受者线程执行。相当于观察者模式，在 receiver 线程执行 sender.signal，执行完成后 notify 当前线程执行 slot 方法
      *
      */
+    connect(_playback_service, &PlaybackService::started, this, [this](const QString &) {
+        _is_playing = true;
+        ShowControlBar();
+    });
     connect(_playback_service, &PlaybackService::started, this, &MainWindow::SlotOnBeforeNewPlay);
     connect(_playback_service, &PlaybackService::started, &_title, &Title::SlotOnPlay);
     connect(_playback_service, &PlaybackService::started, ui->show, &Show::OnStartPlay);
     connect(_playback_service, &PlaybackService::speedChanged, ui->ctrlBar, &CtrlBar::OnSpeed);
     connect(_playback_service, &PlaybackService::pauseChanged, ui->ctrlBar, &CtrlBar::OnPauseStat);
+    connect(_playback_service, &PlaybackService::pauseChanged, this, [this](bool paused) {
+        _is_playing = !paused;
+        ShowControlBar();
+    });
     connect(_playback_service, &PlaybackService::finished, ui->ctrlBar, &CtrlBar::OnStopFinished);
+    connect(_playback_service, &PlaybackService::finished, this, [this]() {
+        _is_playing = false;
+        ShowControlBar();
+    });
     // 视频播放完毕后自动播放下一个
     connect(_playback_service, &PlaybackService::finished, &_playlist, &Playlist::SlotOnNextPlay);
     connect(_playback_service, &PlaybackService::finished, this, &MainWindow::SlotOnSavePlaybackPosition);
 
     connect(_playback_service, &PlaybackService::userStopped, ui->ctrlBar, &CtrlBar::OnUserStopFinished);
+    connect(_playback_service, &PlaybackService::userStopped, this, [this]() {
+        _is_playing = false;
+        ShowControlBar();
+    });
     connect(_playback_service, &PlaybackService::userStopped, &_title, &Title::SlotOnStop);
     // 用户主动停止时也保存播放位置
     connect(_playback_service, &PlaybackService::userStopped, this, &MainWindow::SlotOnSavePlaybackPosition);
@@ -183,6 +208,20 @@ void MainWindow::connectSignalSlots(){
     connect(_playback_service, &PlaybackService::frameDimensionsChanged, ui->show, &Show::OnFrameDimensionsChanged);
     connect(_playback_service, &PlaybackService::errorOccurred, ui->show, &Show::ShowToast);
 
+}
+
+void MainWindow::ShowControlBar()
+{
+    ui->ctrlBar->show();
+    RestartControlBarHideTimer();
+}
+
+void MainWindow::RestartControlBarHideTimer()
+{
+    _control_bar_hide_timer.stop();
+    if (_is_playing) {
+        _control_bar_hide_timer.start();
+    }
 }
 
 void MainWindow::SlotOnMinBtnClicked()

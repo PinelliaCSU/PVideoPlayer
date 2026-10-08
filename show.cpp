@@ -120,6 +120,18 @@ bool Show::eventFilter(QObject *obj, QEvent *event)
 {
     if (obj == ui->label) {
         switch (event->type()) {
+        case QEvent::MouseMove:
+        case QEvent::MouseButtonPress:
+        case QEvent::MouseButtonRelease:
+        case QEvent::TouchBegin:
+        case QEvent::TouchUpdate:
+            emit SigUserInteraction();
+            break;
+        default:
+            break;
+        }
+
+        switch (event->type()) {
         case QEvent::MouseButtonPress: {
             QMouseEvent *mouseEvent = static_cast<QMouseEvent *>(event);
             if (_pipActive && mouseEvent->button() == Qt::LeftButton && _pipWindow) {

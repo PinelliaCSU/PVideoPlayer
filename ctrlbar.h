@@ -36,6 +36,10 @@ public:
     void OnSeekBack(int targetSeconds);
     void OnVolumeChanged(double percent);  // 快捷键音量变化
     void OnAudioModeChanged(int mode);     // 音频模式切换回调（更新按钮文字）
+
+protected:
+    bool eventFilter(QObject *obj, QEvent *event) override;
+
 private:
     bool initUi();
     void connectSignalSlots();
@@ -51,6 +55,7 @@ signals:
     void SigPlayVolume(double percent);
     void SigPlaySeek(double percent);
     void SigShowToast(const QString &text);  // 显示提示信息的信号
+    void SigUserInteraction(); // 鼠标或触摸操作，用于唤醒控制栏
 
     void SigPlayModeChanged(int mode);        // 播放模式切换
     void SigAlwaysOnTopToggled(bool on);    //窗口置顶切换

@@ -53,6 +53,7 @@ signals:
     void SigOpenFile(QString strFile);
     void SigExitFullScreen();
     void SigTogglePlay();   //点击视频实现暂停
+    void SigUserInteraction(); // 鼠标或触摸操作，用于唤醒控制栏
     void SigPipActiveChanged(bool active);
 private slots:
     void OnToastTimeout();

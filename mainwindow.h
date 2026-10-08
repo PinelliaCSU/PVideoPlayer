@@ -6,6 +6,7 @@
 #include <QMouseEvent>
 #include <QPoint>
 #include <QMenu>
+#include <QTimer>
 
 
 #include "playlist.h"
@@ -62,6 +63,9 @@ private:
     void SlotOnCheckResume(int totalSeconds); // 开始播放后检查续播
     void UpdatePlayHistory(const QString& filePath); // 更新播放历史
      void SlotOnClearPlayHistory(); //清除全部播放记录
+
+    void ShowControlBar();
+    void RestartControlBarHideTimer();
 signals:
     void SigSeekForward();
     void SigSeekBack();
@@ -85,6 +89,8 @@ private:
     int  _cached_total_seconds = 0;   // 当前视频总时长
     int  _cached_play_seconds  = 0;   // 当前播放位置（实时缓存）
     bool _resume_checked = false;     // 是否已经检查过续播（防止重复弹窗）
+    QTimer _control_bar_hide_timer;
+    bool _is_playing = false;
 
 
 };

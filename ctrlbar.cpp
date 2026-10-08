@@ -1,6 +1,8 @@
 #include "ctrlbar.h"
 #include "ui_ctrlbar.h"
 #include <QActionGroup>
+#include <QEvent>
+#include <QMouseEvent>
 #include "guiutils.h"
 #include "configutils.h"
 #include "playlist.h"
@@ -13,6 +15,7 @@ CtrlBar::CtrlBar(QWidget *parent) :
     _last_play_seconds(-1)
 {
     ui->setupUi(this);
+    setMouseTracking(true);
 }
 
 CtrlBar::~CtrlBar()
@@ -170,10 +173,35 @@ void CtrlBar::connectSignalSlots()
 
     //连接获取音频按钮
     connect(ui->ExtractAudioBtn,&QPushButton::clicked,this,&CtrlBar::SigExtractAudio);
+
+    // 子控件接收鼠标事件时也要唤醒控制栏。
+    installEventFilter(this);
+    const auto children = findChildren<QWidget *>();
+    for (QWidget *child : children) {
+        child->setMouseTracking(true);
+        child->installEventFilter(this);
+    }
 }
 
+bool CtrlBar::eventFilter(QObject *obj, QEvent *event)
+{
+    Q_UNUSED(obj);
+    switch (event->type()) {
+    case QEvent::MouseMove:
+    case QEvent::MouseButtonPress:
+    case QEvent::MouseButtonRelease:
+    case QEvent::TouchBegin:
+    case QEvent::TouchUpdate:
+        emit SigUserInteraction();
+        break;
+    default:
+        break;
+    }
+    return QWidget::eventFilter(obj, event);
+}
 
 void CtrlBar::OnPauseStat(bool paused){
+    emit SigUserInteraction();
     if(paused){
         GuiUtils::SetIcon(ui->PlayOrPauseBtn,12,QChar(0xf04b));
         ui->PlayOrPauseBtn->setToolTip("点击播放");
