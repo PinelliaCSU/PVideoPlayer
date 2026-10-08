@@ -18,6 +18,7 @@ SOURCES += \
     main.cpp \
     mainwindow.cpp \
     mediacomponents.cpp \
+    medialocator.cpp \
     playbacksessionmanager.cpp \
     medialist.cpp \
     playbackservice.cpp \
@@ -44,6 +45,7 @@ HEADERS += \
     media_types.h \
     medialist.h \
     media_raii.h \
+    medialocator.h \
     playbackbackend.h \
     playbackservice.h \
     playlist.h \

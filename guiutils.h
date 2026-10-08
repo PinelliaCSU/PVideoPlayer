@@ -14,8 +14,6 @@ void SetIcon(QPushButton *btn, int iconSize, QChar icon);
 
 // 将按键代码转换为可读的按键名称
 QString GetKeyName(int key);
-
-bool CheckNetworkStream(const QString& fileName);
 } // namespace GuiUtils
 
 #endif // GUIUTILS_H

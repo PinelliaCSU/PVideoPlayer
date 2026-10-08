@@ -2,6 +2,7 @@
 #define DATACTRL_H
 
 #define __STDC_CONSTANT_MACROS
+#include <string>
 #include <thread>
 #include "media_raii.h"
 #include "mediacomponents.h"
@@ -234,7 +235,7 @@ typedef struct VideoState {
     struct AudioParams audio_src;
 
     struct AudioParams audio_tgt;
-    struct SwrContext *swr_ctx;
+    SwrContextPtr owned_swr_ctx;
     int frame_drops_early;
     int frame_drops_late;
 
@@ -261,11 +262,11 @@ typedef struct VideoState {
     AVStream *video_st;
     PacketQueue videoq;
     double max_frame_duration;      // maximum duration of a frame - above this, we consider the jump a timestamp discontinuity
-    struct SwsContext *img_convert_ctx;
-    struct SwsContext *sub_convert_ctx;
+    SwsContextPtr owned_img_convert_ctx;
+    SwsContextPtr owned_sub_convert_ctx;
     int eof;
 
-    char *filename;
+    std::string filename;
     int width, height, xleft, ytop;
     int step;
 

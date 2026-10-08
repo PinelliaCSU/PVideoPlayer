@@ -92,7 +92,7 @@ private:
     void video_image_display(VideoState *is);
     void calculate_display_rect(SDL_Rect *rect, int src_x_left, int src_y_top, int src_width, int src_height, int pic_width, int pic_height, AVRational pic_sar);
     int realloc_texture(SdlTexturePtr &texture, Uint32 new_format, int new_width, int new_height, SDL_BlendMode blend_mode, int init_texture);
-    int upload_texture(SDL_Texture *tex, AVFrame *frame, struct SwsContext **img_convert_ctx);
+    int upload_texture(SDL_Texture *tex, AVFrame *frame, SwsContextPtr &img_convert_ctx);
     int stream_has_enough_packets(AVStream *st, int stream_id, PacketQueue *queue);
 
     void stream_toggle_pause(VideoState *is);

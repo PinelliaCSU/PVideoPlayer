@@ -3,6 +3,7 @@
 #include <QFileInfo>
 #include <QMessageBox>
 #include "guiutils.h"
+#include "medialocator.h"
 
 Title::Title(QWidget *parent)
     : QWidget(parent)
@@ -39,7 +40,7 @@ bool Title::Init()
 
 void Title::SlotOnPlay(QString filePath)
 {
-    bool isNetworkStream = GuiUtils::CheckNetworkStream(filePath);
+    bool isNetworkStream = MediaLocator::isNetworkStream(filePath);
 
     qDebug() << "Title::SlotOnPlay";
     QFileInfo fileInfo(filePath);

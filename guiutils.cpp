@@ -78,19 +78,4 @@ QString GetKeyName(int key)
     return keyName;
 }
 
-bool CheckNetworkStream(const QString &fileName)
-{
-        bool isNetworkStream = fileName.startsWith("http://", Qt::CaseInsensitive) ||
-                               fileName.startsWith("https://", Qt::CaseInsensitive) ||
-                               fileName.startsWith("rtmp://", Qt::CaseInsensitive) ||
-                               fileName.startsWith("rtsp://", Qt::CaseInsensitive) ||
-                               fileName.startsWith("mms://", Qt::CaseInsensitive) ||
-                               fileName.startsWith("mmsh://", Qt::CaseInsensitive) ||
-                               fileName.startsWith("mmst://", Qt::CaseInsensitive) ||
-                               fileName.startsWith("rtp://", Qt::CaseInsensitive) ||
-                               fileName.startsWith("sdp://", Qt::CaseInsensitive);
-
-        return isNetworkStream;
-}
-
 } // namespace GuiUtils

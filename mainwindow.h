@@ -13,6 +13,8 @@
 
 class PlaybackService;
 class PlaybackSessionManager;
+class PlaybackEventSource;
+class IPlaybackBackend;
 
 QT_BEGIN_NAMESPACE
 namespace Ui {
@@ -25,7 +27,7 @@ class MainWindow : public QMainWindow
     Q_OBJECT
 
 public:
-    MainWindow(QWidget *parent = nullptr);
+    MainWindow(PlaybackEventSource *events, IPlaybackBackend *backend, QWidget *parent = nullptr);
     ~MainWindow();
     bool Init();
 protected:

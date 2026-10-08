@@ -8,11 +8,10 @@
 #include "guiutils.h"
 #include "configutils.h"
 #include <QShortcut>
-#include "videoctrl.h"
 #include "playbackservice.h"
 #include "playbacksessionmanager.h"
 
-MainWindow::MainWindow(QWidget *parent)
+MainWindow::MainWindow(PlaybackEventSource *events, IPlaybackBackend *backend, QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::MainWindow),
     _playlist(this),
@@ -22,8 +21,10 @@ MainWindow::MainWindow(QWidget *parent)
     _playback_service(nullptr),
     _session_manager(new PlaybackSessionManager(this))
 {
-    const int sessionId = _session_manager->createSession(VideoCtrl::GetInstance(),
-                                                          VideoCtrl::GetInstance());
+    Q_ASSERT(events != nullptr);
+    Q_ASSERT(backend != nullptr);
+
+    const int sessionId = _session_manager->createSession(events, backend);
     _playback_service = _session_manager->session(sessionId);
     ui->setupUi(this);
     setWindowFlags(Qt::FramelessWindowHint);

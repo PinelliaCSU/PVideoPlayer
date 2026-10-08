@@ -3,6 +3,7 @@
 #include "guiutils.h"
 #include "configutils.h"
 #include "medialist.h"
+#include "medialocator.h"
 
 #include <QFileInfo>
 #include <QMessageBox>
@@ -70,7 +71,7 @@ void Playlist::connectSignalSlots()
 
 bool Playlist::addMediaItem(const QString &locator, bool showDuplicateMessage)
 {
-    const bool networkStream = GuiUtils::CheckNetworkStream(locator);
+    const bool networkStream = MediaLocator::isNetworkStream(locator);
     const QString displayName = networkStream
         ? locator
         : QFileInfo(locator).fileName();
@@ -100,22 +101,18 @@ void Playlist::rebuildView()
 
 void Playlist::SlotOnAddFile(QString filePath)
 {
-    if (filePath.isEmpty()) {
+    QString locator;
+    switch (MediaLocator::normalize(filePath, false, &locator, nullptr)) {
+    case MediaLocator::LocatorStatus::Empty:
         qWarning() << "Playlist::SlotOnAddFile: empty locator";
         return;
-    }
-
-    const bool networkStream = GuiUtils::CheckNetworkStream(filePath);
-    QString locator = filePath;
-    if (!networkStream) {
-        const QFileInfo fileInfo(filePath);
-        if (!fileInfo.exists()) {
-            QMessageBox::warning(
-                this, tr("文件不存在"),
-                tr("文件 \"%1\" 不存在，请检查路径是否正确。").arg(fileInfo.fileName()));
-            return;
-        }
-        locator = fileInfo.absoluteFilePath();
+    case MediaLocator::LocatorStatus::FileNotExists:
+        QMessageBox::warning(
+            this, tr("文件不存在"),
+            tr("文件 \"%1\" 不存在，请检查路径是否正确。").arg(QFileInfo(filePath).fileName()));
+        return;
+    default:
+        break;
     }
     addMediaItem(locator, true);
 }
@@ -179,42 +176,24 @@ void Playlist::SlotOnNextPlay()
 
 void Playlist::OnAddFileAndPlay(QString fileName)
 {
-    const bool networkStream = GuiUtils::CheckNetworkStream(fileName);
-    if (!networkStream) {
-        const QStringList supportedExtensions = {
-            ".mkv", ".rmvb", ".mp4", ".avi", ".flv", ".wmv", ".3gp"
-        };
-        bool supported = false;
-        for (const QString &extension : supportedExtensions) {
-            if (fileName.endsWith(extension, Qt::CaseInsensitive)) {
-                supported = true;
-                break;
-            }
-        }
-        if (!supported) {
-            return;
-        }
-
-        const QFileInfo fileInfo(fileName);
-        if (!fileInfo.exists()) {
-            QMessageBox::warning(
-                this, tr("文件不存在"),
-                tr("文件 \"%1\" 不存在，请检查路径是否正确。").arg(fileInfo.fileName()));
-            return;
-        }
-        fileName = fileInfo.absoluteFilePath();
+    QString locator;
+    switch (MediaLocator::normalize(fileName, true, &locator, nullptr)) {
+    case MediaLocator::LocatorStatus::Empty:
+    case MediaLocator::LocatorStatus::UnsupportedFormat:
+        // 拖入空地址或不支持的媒体格式时静默忽略
+        return;
+    case MediaLocator::LocatorStatus::FileNotExists:
+        QMessageBox::warning(
+            this, tr("文件不存在"),
+            tr("文件 \"%1\" 不存在，请检查路径是否正确。").arg(QFileInfo(fileName).fileName()));
+        return;
+    default:
+        break;
     }
 
-    int row = -1;
-    const QList<MediaItem> items = _model.items();
-    for (int i = 0; i < items.size(); ++i) {
-        if (items.at(i).locator == fileName) {
-            row = i;
-            break;
-        }
-    }
+    int row = _model.indexOf(locator);
     if (row < 0) {
-        addMediaItem(fileName, false);
+        addMediaItem(locator, false);
         row = _model.rowCount() - 1;
     }
     playByIndex(row);

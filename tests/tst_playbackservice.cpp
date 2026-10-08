@@ -1,19 +1,10 @@
+#include "tst_playbackservice.h"
+
 #include <QtTest>
 
 #include "../playbackservice.h"
 #include "../playbacksessionmanager.h"
 #include "fakeplaybackbackend.h"
-
-class PlaybackServiceTest : public QObject
-{
-    Q_OBJECT
-
-private slots:
-    void commandsAreForwardedAndStateIsUpdated();
-    void emptyLocatorRaisesError();
-    void commandsFromAnotherThreadAreSerialized();
-    void sessionsAreIndependent();
-};
 
 void PlaybackServiceTest::commandsAreForwardedAndStateIsUpdated()
 {
@@ -97,6 +88,3 @@ void PlaybackServiceTest::sessionsAreIndependent()
     QVERIFY(manager.session(secondId) != nullptr);
     QVERIFY(manager.destroySession(secondId));
 }
-
-QTEST_MAIN(PlaybackServiceTest)
-#include "tst_playbackservice.moc"

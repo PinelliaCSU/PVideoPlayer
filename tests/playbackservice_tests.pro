@@ -5,13 +5,19 @@ TEMPLATE = app
 INCLUDEPATH += ..
 
 SOURCES += \
+    testmain.cpp \
+    tst_medialocator.cpp \
+    tst_playbackservice.cpp \
+    ../medialocator.cpp \
     ../playbackservice.cpp \
-    ../playbacksessionmanager.cpp \
-    tst_playbackservice.cpp
+    ../playbacksessionmanager.cpp
 
 HEADERS += \
+    tst_medialocator.h \
+    tst_playbackservice.h \
+    fakeplaybackbackend.h \
+    ../medialocator.h \
     ../playbacksessionmanager.h \
     ../media_types.h \
     ../playbackbackend.h \
-    ../playbackservice.h \
-    fakeplaybackbackend.h
+    ../playbackservice.h

@@ -249,6 +249,15 @@ VideoCtrl * VideoCtrl::GetInstance() {
     return m_instance;
 }
 
+PlaybackBackendBundle CreateDefaultPlaybackBackend()
+{
+    VideoCtrl *instance = VideoCtrl::GetInstance();
+    PlaybackBackendBundle bundle;
+    bundle.events = instance;
+    bundle.backend = instance;
+    return bundle;
+}
+
 VideoState * VideoCtrl::stream_open(const char *filename) {
     VideoState *is = new (std::nothrow) VideoState{};
     if (!is) {
@@ -259,9 +268,7 @@ VideoState * VideoCtrl::stream_open(const char *filename) {
     is->last_video_stream = is->video_stream = -1;
     is->last_audio_stream = is->audio_stream = -1;
 
-    is->filename = av_strdup(filename);
-    if (!is->filename)
-        goto fail;
+    is->filename = filename;
 
     // 窗口起始位置
     is->ytop = 0;
@@ -387,15 +394,15 @@ void VideoCtrl::read_thread(VideoState *is) {
 
     memset(stream_index, -1, sizeof(stream_index));
     is->eof = 0;
-    if (!is->demux_reader.open(is->filename, decode_interrupt_cb, is)) {
-        av_log_error("cannot open %s\n", is->filename);
+    if (!is->demux_reader.open(is->filename.c_str(), decode_interrupt_cb, is)) {
+        av_log_error("cannot open %s\n", is->filename.c_str());
         ret = -1;
         goto fail;
     }
     ic = is->demux_reader.context();
 
     // 输出视频信息，可以不写
-    av_dump_format(ic, 0, is->filename, 0);
+    av_dump_format(ic, 0, is->filename.c_str(), 0);
 
     is->ic = ic;
 
@@ -1122,32 +1129,31 @@ int VideoCtrl::audio_decode_frame(VideoState *is) {
             af->frame->channel_layout : av_get_default_channel_layout(av_frame_get_channels(af->frame));
     wanted_nb_samples = synchronize_audio(is, af->frame->nb_samples);
     /*
-     * (wanted_nb_samples != af->frame->nb_samples && !is->swr_ctx) 这个判断又是为了什么？
+     * (wanted_nb_samples != af->frame->nb_samples && !is->owned_swr_ctx) 这个判断又是为了什么？
      * 如果完全相同，是不需要创建重采样器的
      * mark: 重采样器 是根据音频源参数和目标参数进行转换的，如果此时参数变了，那么就需要重新初始化 重采样器
      */
     // 根据是否使用 stem 源来选择重采样器和参数
-    SwrContext **p_swr_ctx =  &is->swr_ctx;
+    SwrContextPtr &swr_ctx = is->owned_swr_ctx;
     AudioParams *p_audio_src = &is->audio_src;
     AudioParams &audio_tgt = is->audio_tgt;
 
     if (af->frame->format != p_audio_src->fmt ||
         wanted_channel_layout != p_audio_src->channel_layout ||
         af->frame->sample_rate != p_audio_src->freq ||
-        (wanted_nb_samples != af->frame->nb_samples && !*p_swr_ctx)) {
-        swr_free(p_swr_ctx);
+        (wanted_nb_samples != af->frame->nb_samples && !swr_ctx)) {
         /*
          * mark：哦知道了，audio_src 保存的是当前音频帧的参数，而 audio_tgt 保存的是SDL播放的参数（或者说当前机器输出声音的参数）
          */
-        *p_swr_ctx = swr_alloc_set_opts(nullptr,
+        swr_ctx.reset(swr_alloc_set_opts(nullptr,
                                         audio_tgt.channel_layout, audio_tgt.fmt, audio_tgt.freq,
                                         wanted_channel_layout, (AVSampleFormat)af->frame->format, af->frame->sample_rate,
-                                        0, nullptr);
-        if (!*p_swr_ctx || swr_init(*p_swr_ctx) < 0) {
+                                        0, nullptr));
+        if (!swr_ctx || swr_init(swr_ctx.get()) < 0) {
             av_log_error( "cannot create sample rate converter for conversion of %d Hz %s %d channels to %d Hz %s %d channels\n",
                          af->frame->sample_rate, av_get_sample_fmt_name((AVSampleFormat)af->frame->format), av_frame_get_channels(af->frame),
                          audio_tgt.freq, av_get_sample_fmt_name(audio_tgt.fmt), audio_tgt.channels);
-            swr_free(p_swr_ctx);
+            swr_ctx.reset();
             return -1;
         }
         // 更新当前音频帧的参数
@@ -1157,7 +1163,7 @@ int VideoCtrl::audio_decode_frame(VideoState *is) {
         p_audio_src->fmt = (AVSampleFormat)af->frame->format;
     }
     // 如果我们设置了音频重采样器，说明需要进行音频重采样
-    if (*p_swr_ctx) {
+    if (swr_ctx) {
         const uint8_t **in = (const uint8_t **)af->frame->extended_data;
         uint8_t **out = &is->audio_buf1;
         /*
@@ -1181,7 +1187,7 @@ int VideoCtrl::audio_decode_frame(VideoState *is) {
              * (wanted_nb_samples - af->frame->nb_samples) * audio_tgt.freq / af->frame->sample_rate 是重采样后要补充多少个样本点
              * wanted_nb_samples * audio_tgt.freq / af->frame->sample_rate 是 af->frame->nb_samples 重采样后的样本数点数
              */
-            if (swr_set_compensation(*p_swr_ctx, (wanted_nb_samples - af->frame->nb_samples) * audio_tgt.freq / af->frame->sample_rate,
+            if (swr_set_compensation(swr_ctx.get(), (wanted_nb_samples - af->frame->nb_samples) * audio_tgt.freq / af->frame->sample_rate,
                                      wanted_nb_samples * audio_tgt.freq / af->frame->sample_rate) < 0) {
                 av_log_error("swr_set_compensation failed\n");
                 return -1;
@@ -1195,7 +1201,7 @@ int VideoCtrl::audio_decode_frame(VideoState *is) {
         if (!is->audio_buf1)
             return AVERROR(ENOMEM);
         // 进行重采样，out_count 并不是说真的要还给我们这么多个样本点，而是说 out 的最大值是 out_count
-        len2 = swr_convert(*p_swr_ctx, out, out_count, in, af->frame->nb_samples);
+        len2 = swr_convert(swr_ctx.get(), out, out_count, in, af->frame->nb_samples);
         if (len2 < 0) {
             av_log_error("swr_convert failed\n");
             return -1;
@@ -1207,8 +1213,8 @@ int VideoCtrl::audio_decode_frame(VideoState *is) {
          */
         if (len2 == out_count) {
             av_log_warning("audio_buffer is probably too small\n");
-            if (swr_init(*p_swr_ctx) < 0)
-                swr_free(p_swr_ctx);
+            if (swr_init(swr_ctx.get()) < 0)
+                swr_ctx.reset();
         }
         is->audio_buf = is->audio_buf1;
         // 本次重采样后的样本点总的字节大小
@@ -1467,9 +1473,8 @@ void VideoCtrl::do_exit(VideoState *is) {
                 m_vid_texture.reset(SDL_CreateTexture(m_renderer, sdlPixFmt,
                                                   SDL_TEXTUREACCESS_STREAMING, m_last_frame->width, m_last_frame->height));
                 if (m_vid_texture) {
-                    struct SwsContext* sws_ctx = nullptr;
-                    upload_texture(m_vid_texture.get(), m_last_frame.get(), &sws_ctx);
-                    sws_freeContext(sws_ctx);
+                    SwsContextPtr sws_ctx;
+                    upload_texture(m_vid_texture.get(), m_last_frame.get(), sws_ctx);
                     SDL_SetTextureBlendMode(m_vid_texture.get(), SDL_BLENDMODE_NONE);
                     av_log_info("do_exit: texture recreated successfully\n");
                 } else {
@@ -1523,10 +1528,6 @@ void VideoCtrl::stream_close(VideoState *is) {
 
     is->owned_continue_read_thread.reset();
 
-    sws_freeContext(is->img_convert_ctx);
-
-    av_free(is->filename);
-
     delete is;
 
     // 关闭 stem 资源
@@ -1547,7 +1548,7 @@ void VideoCtrl::stream_component_close(VideoState *is, int stream_index) {
         decoder_abort(&is->auddec, &is->sampq);
         m_audio_output.close();
         decoder_destroy(&is->auddec);
-        swr_free(&is->swr_ctx);
+        is->owned_swr_ctx.reset();
         av_freep(&is->audio_buf1);
         is->audio_buf1_size = 0;
         is->audio_buf = nullptr;
@@ -2008,7 +2009,7 @@ void VideoCtrl::video_image_display(VideoState *is) {
         if (realloc_texture(m_vid_texture, sdlPixFmt, vp->frame->width, vp->frame->height, SDL_BLENDMODE_NONE, 0) < 0)
             return;
         // 更新纹理内容
-        if (upload_texture(m_vid_texture.get(), vp->frame, &is->img_convert_ctx) < 0)
+        if (upload_texture(m_vid_texture.get(), vp->frame, is->owned_img_convert_ctx) < 0)
             return;
         vp->uploaded = 1;
         vp->flip_v = vp->frame->linesize[0] < 0;
@@ -2085,7 +2086,7 @@ int VideoCtrl::realloc_texture(SdlTexturePtr &texture, Uint32 new_format, int ne
     return 0;
 }
 
-int VideoCtrl::upload_texture(SDL_Texture *tex, AVFrame *frame, struct SwsContext **img_convert_ctx) {
+int VideoCtrl::upload_texture(SDL_Texture *tex, AVFrame *frame, SwsContextPtr &img_convert_ctx) {
     int ret = 0;
     switch (frame->format) {
     case AV_PIX_FMT_YUV420P:
@@ -2107,14 +2108,14 @@ int VideoCtrl::upload_texture(SDL_Texture *tex, AVFrame *frame, struct SwsContex
         break;
     default:
         /* This should only happen if we are not using avfilter... */
-        *img_convert_ctx = sws_getCachedContext(*img_convert_ctx,
+        img_convert_ctx.reset(sws_getCachedContext(img_convert_ctx.release(),
                                                 frame->width, frame->height, (AVPixelFormat)frame->format, frame->width, frame->height,
-                                                AV_PIX_FMT_BGRA, SWS_BICUBIC, NULL, NULL, NULL);
-        if (*img_convert_ctx != NULL) {
+                                                AV_PIX_FMT_BGRA, SWS_BICUBIC, NULL, NULL, NULL));
+        if (img_convert_ctx != nullptr) {
             uint8_t *pixels[4];
             int pitch[4];
             if (!SDL_LockTexture(tex, NULL, (void **)pixels, pitch)) {
-                sws_scale(*img_convert_ctx, (const uint8_t * const *)frame->data, frame->linesize,
+                sws_scale(img_convert_ctx.get(), (const uint8_t * const *)frame->data, frame->linesize,
                           0, frame->height, pixels, pitch);
                 SDL_UnlockTexture(tex);
             }

@@ -50,4 +50,14 @@ public:
     virtual bool OnExtractAudio(const QString &inputFile, const QString &outputFile) = 0;
 };
 
+// 默认播放后端（真实实现由 VideoCtrl 提供）。
+// 通过工厂函数创建后端，使组合根（main）无需包含 FFmpeg/SDL 等具体后端头文件。
+struct PlaybackBackendBundle
+{
+    PlaybackEventSource *events = nullptr;
+    IPlaybackBackend *backend = nullptr;
+};
+
+PlaybackBackendBundle CreateDefaultPlaybackBackend();
+
 #endif // PLAYBACKBACKEND_H

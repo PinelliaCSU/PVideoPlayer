@@ -478,3 +478,48 @@ Adapters (FFmpegBackend, SDLAudioSink, SDLVideoSink, QSettingsRepository)
 - `Decoder` 已持有 `DecoderComponent`，音视频 send/receive/flush 通过组件边界执行；现有 codec context 仍由兼容路径提供并以观察方式绑定，避免重复释放。
 
 验证结果：使用 Qt 6.7.2 MinGW 11.2 工具链完成 Release 构建，QtTest 回归测试通过。真实媒体播放、seek、网络流和高并发队列场景仍需后续集成测试覆盖。
+
+## 19. 当前轮次：VideoState 剩余资源所有权迁移
+
+本阶段完成 `VideoState` 中最后一批手工管理资源的 RAII 化，覆盖文档第 15、18 节列出的待迁移项：
+
+- `swr_ctx` 迁移为 `SwrContextPtr owned_swr_ctx`；`audio_decode_frame` 的重采样器创建、失败回滚与重初始化全部通过所有权对象完成；
+- `img_convert_ctx`、`sub_convert_ctx` 迁移为 `SwsContextPtr owned_img_convert_ctx`、`owned_sub_convert_ctx`；
+- `upload_texture()` 形参由 `SwsContext **` 改为 `SwsContextPtr &`，`sws_getCachedContext` 通过 `release()`/`reset()` 保持原有“缓存命中即复用、参数变化即重建”的语义；
+- `VideoState::filename` 由 `char *`（`av_strdup`/`av_free`）迁移为 `std::string`，删除手工分配与释放；
+- `stream_close()` 不再手工调用 `sws_freeContext`/`av_free`，`stream_component_close()` 不再手工 `swr_free`，资源统一随 `VideoState` 析构释放；
+- 顺带消除了原先从未释放的 `sub_convert_ctx` 处理路径风险（改由 RAII 兜底）。
+
+验证结果：主工程 Release 构建通过，QtTest 回归通过。
+
+## 20. 当前轮次：组合根注入与 UI 层静态查找移除
+
+对应文档第 6.3 节第 1 项“取消 UI 层的静态查找”和第 6.1 节“UI 不直接包含 FFmpeg/SDL 头文件”：
+
+- 新增 `CreateDefaultPlaybackBackend()` 工厂，返回 `PlaybackBackendBundle{events, backend}`；声明位于只依赖 Qt 的 `playbackbackend.h`，实现位于后端实现文件；
+- `main.cpp` 成为组合根：创建后端并注入 `MainWindow`，不再由窗口内部查找单例；
+- `MainWindow` 构造函数改为接收 `PlaybackEventSource *` 与 `IPlaybackBackend *`，内部仅调用 `PlaybackSessionManager::createSession()`；
+- `mainwindow.cpp` 移除 `#include "videoctrl.h"`，UI 层翻译单元不再间接包含 FFmpeg/SDL 头文件；
+- `CreateDefaultPlaybackBackend()` 在 `videoctrl.cpp` 内实现，避免组合根为了拿后端而包含具体后端头（也规避了 `SDL.h` 对 `main` 的宏重定义）。
+
+验证结果：主工程 Release 构建通过，启动冒烟测试通过。
+
+## 21. 当前轮次：媒体地址校验统一与组件测试
+
+对应文档第 6.3 节第 4 项“文件/URL 解析和校验统一”：
+
+- 新增 `MediaLocator`（`medialocator.h/.cpp`）：统一网络流判定、受支持媒体扩展名判定，以及“空地址/不受支持格式/文件不存在/有效”的地址归一化与校验；
+- `Playlist::SlotOnAddFile` 与 `Playlist::OnAddFileAndPlay` 改为调用 `MediaLocator::normalize()`，删除两处重复的扩展名、存在性和绝对路径处理逻辑；
+- `GuiUtils::CheckNetworkStream` 移除，`Playlist`/`Title` 统一改用 `MediaLocator::isNetworkStream()`；
+- `PlaylistModel` 新增 `indexOf()`，`addItem()` 与 `OnAddFileAndPlay()` 复用同一去重逻辑，删除手写重复查找；
+- 测试工程重构为可运行多个测试类（新增 `tests/testmain.cpp`、`tests/tst_medialocator.*`），新增 `MediaLocatorTest` 10 项，覆盖网络流判定、扩展名判定、空地址、优先格式校验、缺失文件、绝对路径归一化。
+
+验证结果：主工程 Release 构建通过；`MediaLocatorTest` 10/10、`PlaybackServiceTest` 6/6 全部通过。
+
+## 22. 后续仍需完成项
+
+- `VideoOutputResources` 完整接管窗口、渲染器、纹理和渲染循环（当前窗口/渲染器仍为 `VideoCtrl` 裸成员）；
+- `Decoder::pkt`/`pkt_temp` 与队列节点的 `AVPacket` 生命周期进一步内聚；
+- 硬件解码、滤镜链和字幕插件从接口落地为真实平台实现；
+- 真实媒体播放、seek、网络流、设备失效和高并发队列场景的集成/压力测试；
+- 沿用“兼容适配器 + 小步构建验证”的方式推进，避免一次性替换播放核心。

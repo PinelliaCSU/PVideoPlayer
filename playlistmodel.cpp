@@ -44,13 +44,8 @@ QHash<int, QByteArray> PlaylistModel::roleNames() const
 
 bool PlaylistModel::addItem(const MediaItem &item)
 {
-    if (item.locator.isEmpty()) {
+    if (item.locator.isEmpty() || indexOf(item.locator) >= 0) {
         return false;
-    }
-    for (const MediaItem &existing : m_items) {
-        if (existing.locator == item.locator) {
-            return false;
-        }
     }
 
     const int row = m_items.size();
@@ -92,4 +87,17 @@ MediaItem PlaylistModel::itemAt(int row) const
 QList<MediaItem> PlaylistModel::items() const
 {
     return m_items;
+}
+
+int PlaylistModel::indexOf(const QString &locator) const
+{
+    if (locator.isEmpty()) {
+        return -1;
+    }
+    for (int row = 0; row < m_items.size(); ++row) {
+        if (m_items.at(row).locator == locator) {
+            return row;
+        }
+    }
+    return -1;
 }

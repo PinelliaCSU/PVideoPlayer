@@ -28,6 +28,7 @@ public:
     void clear();
     MediaItem itemAt(int row) const;
     QList<MediaItem> items() const;
+    int indexOf(const QString &locator) const;
 
 private:
     QList<MediaItem> m_items;
