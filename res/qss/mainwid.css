@@ -1,0 +1,76 @@
+/* 实现 QMainWindow 的 MainWindow 类，即我们项目的整个窗口界面*/
+QMainWindow#MainWindow{
+    /*添加边框并设置背景为黑色*/
+    border: 1px solid black;
+    background-color: #202129;
+
+}
+
+/**********状态栏-即窗口最下方那一栏**********/
+QStatusBar {
+/*    设置背景色为灰色*/
+    background: rgb(57, 58, 60);
+}
+
+
+/**********菜单(提示：子组件也会生效，故MediaList的menu的样式也是来源这里)**********/
+QMenu {
+/*边框1px，粗线条，黑色，背景黑色，字体颜色白色*/
+    border: 1px solid rgb(100, 100, 100);
+    background:#2e2f37;
+    color:white;
+}
+/*菜单的子项*/
+QMenu::item {
+/*高度22px，内边距 25px（即文本文字和边框的距离）*/
+    height: 22px;
+    padding: 0px 25px 0px 20px;
+}
+/*菜单的子项为启用状态*/
+QMenu::item:enabled {
+/*字体颜色为白色*/
+    color: rgb(225, 225, 225);
+}
+/*菜单的子项为禁用状态---目前未设置过禁用，故这个样式其实没有生效过*/
+QMenu::item:!enabled {
+/*字体颜色为灰色*/
+    color: rgb(155, 155, 155);
+}
+/*菜单的启用状态的子项被选中*/
+QMenu::item:enabled:selected {
+/*字体颜色为白色，背景色为半透明的白色，有一丢丢灰*/
+    color: rgb(230, 230, 230);
+    background: rgba(255, 255, 255, 40);
+}
+/*菜单每个子项之间的间隔线*/
+QMenu::separator {
+/*高度1px，背景灰黑色*/
+    height: 1px;
+    background: rgb(100, 100, 100);
+}
+/*菜单的指示器，如复选框和单选按钮*/
+QMenu::indicator {
+/*宽高13px*/
+    width: 13px;
+    height: 13px;
+}
+/*菜单的子项的图标，目前未设置图标，故其实没用*/
+QMenu::icon {
+/*内边距2px*/
+    padding-left: 2px;
+    padding-right: 2px;
+}
+
+/*右侧的播放列表*/
+QWidget#PlaylistWid>PlaylistContents
+{
+/*边框为1px，粗线条，黑色*/
+    border: 1px solid black;
+}
+
+/*中间的播放区域*/
+QWidget#CtrlBarAndShowWidget{
+/*边框为1px，粗线条，黑色，但去掉上边框*/
+    border: 1px solid black;
+    border-top:none;
+}

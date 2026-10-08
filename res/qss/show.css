@@ -1,0 +1,8 @@
+/*当前组件，实际上是控制的QLabel的样式，即真正的图片显示区域*/
+QWidget{
+/*黑色背景，字体颜色为白色，边框1px，粗线条，黑色，无下边框线*/
+    background-color: #1a1a20;
+    color: white;
+    border: 1px solid black;
+    border-bottom: none;
+}

@@ -1,0 +1,40 @@
+/* 作用于所有组件，注意，*的优先级最低，一旦有其他的生效了那么*的样式就无效*/
+*{
+/*背景设置为灰色，文本颜色设置为白色*/
+    background: #2e2f37;
+    color: white;
+    font-size: 18px; /*字体大小暂时这样设置*/
+}
+
+/*列表组件 */
+QListWidget{
+/*边框为1px，粗线条，黑色*/
+    border: 1px solid Black;
+}
+
+/*列表的里面的元素的鼠标悬浮时事件*/
+QListWidget::item:hover{
+/* 内边距0px，外边距1px，文本颜色为青色，边框为1px，粗线条，青色*/
+    padding: 0px;
+    margin: 1px;
+    color: Cyan;
+    border: 1px solid Cyan;
+}
+
+/*列表的里面的元素的鼠标选中时事件*/
+QListWidget::item:selected{
+/* 背景色为青色，内边距0px，外边距1px，文本颜色为青色，边框为1px，粗线条，青色*/
+    background: Cyan;
+    padding: 0px;
+    margin: 1px;
+    color: black;
+    border: 1px solid Cyan;
+}
+
+/*提示*/
+QToolTip {
+/*设置无边框，背景颜色为黑色，字体颜色为白色*/
+    border: none;
+    background-color: #2e2f37;
+    color: white;
+}

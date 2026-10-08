@@ -1,0 +1,33 @@
+/* 作用于所有组件，注意，*的优先级最低，一旦有其他的生效了那么*的样式就无效*/
+*{
+/*背景设置为黑色，移除所有组件的边框，设置前景颜色（如文本颜色）为白色*/
+    background-color: #202129;
+    border: none;
+    color: white;
+}
+
+/*鼠标悬浮在按钮上时按钮变成青色*/
+QPushButton:hover {
+    color: Cyan;
+}
+
+/*鼠标按下时按钮变成军蓝色*/
+QPushButton:pressed {
+    color: CadetBlue;
+}
+
+/*鼠标悬浮在关闭按钮上时关闭按钮变成番茄色*/
+QPushButton#CloseBtn:hover {
+    color: Tomato;
+}
+
+/*鼠标按下关闭按钮时关闭按钮变成红色*/
+QPushButton#CloseBtn:pressed{
+    color: red;
+}
+
+/* 实现 QLabel 的 MovieNameLab 类，即媒体名称这个标签页*/
+QLabel#MovieNameLab {
+/* 文本颜色为灰色*/
+    color: #c4c6d2
+}

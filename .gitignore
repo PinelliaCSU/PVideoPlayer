@@ -1,0 +1,54 @@
+# Qt/qmake generated build directories and files
+build/
+*.pro.user
+*.pro.user.*
+*.qmake.stash
+Makefile
+Makefile.*
+*.moc
+qrc_*.cpp
+ui_*.h
+moc_*.cpp
+
+# Compiled objects, binaries and intermediate files
+*.o
+*.obj
+*.a
+*.so
+*.dll
+*.lib
+*.exp
+*.pdb
+*.ilk
+*.exe
+*.app
+*.dSYM/
+
+# Keep source-controlled third-party runtime files if they are intentionally
+# shipped from the repository. Build outputs above are ignored by directory.
+!dll/
+!dll/**/
+!lib/
+!lib/**/
+
+# Application-generated local data and logs
+*.log
+settings.ini
+player_config.ini
+PVideo-player.log
+huahua-player.log
+
+# Qt Creator / Visual Studio Code user-specific files
+.qtc_clangd/
+.vscode/*
+!.vscode/README.md
+*.user
+*.user.*
+
+# Operating system and editor metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~

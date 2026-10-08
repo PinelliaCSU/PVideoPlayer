@@ -1,0 +1,181 @@
+/*作用于所有组件*/
+*{
+/*设置背景颜色为透明，文本颜色为白色*/
+    background-color: transparent;
+    color: white;
+}
+
+/*提示*/
+QToolTip {
+/*设置无边框，背景颜色为黑色，字体颜色为白色*/
+    border: none;
+    background-color: #2e2f37;
+    color: white;
+}
+
+/*指定该组件,即播放进度条和音量条的父组件*/
+QWidget#PlaySliderBgWidget {
+/*下边框1px，粗线条，黑色*/
+    border-bottom: 1px solid black;
+}
+
+/*鼠标悬浮在按钮上*/
+QPushButton:hover{
+/*    字体颜色为青色*/
+    color: Cyan;
+}
+
+/*鼠标按下按钮时*/
+QPushButton:pressed{
+    /*字体颜色为军蓝色*/
+    color: CadetBlue;
+}
+
+/*指定该组件，即两个时间之间的 斜杠（/）*/
+QLabel#TimeSplitLabel{
+/*字体颜色为灰色*/
+    color: #c4c6d2
+}
+
+/*指定该组件，即总时间*/
+QTimeEdit#VideoTotalTimeTimeEdit {
+/*字体颜色为灰色*/
+    color: #c4c6d2
+}
+
+/*日期编辑器，即两个时间*/
+QTimeEdit {
+/*无边框*/
+    border: none;
+/*    background-color: transparent;*/
+}
+
+/*整个滑动条的最底层样式样式*/
+QSlider::groove:horizontal{
+/*边框1px，粗线条，黑色，背景灰色，高3px，圆角2px*/
+    border: 1px solid #4A708B;
+    background: #C0C0C0;
+    height: 3px;
+    border-radius: 2px;
+/*    这个-1px好像没啥用*/
+    padding-left: -1px;
+    padding-right: -1px;
+}
+
+/*滑动条已经划过的那片区域*/
+QSlider::sub-page:horizontal {
+/*其实就是把进度条变成蓝色*/
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #B1B1B1, stop:1 #c4c4c4);
+    background: qlineargradient(x1: 0, y1: 0.2, x2: 1, y2: 1,
+        stop: 0 #5DCCFF, stop: 1 #1874CD);
+    border: 1px solid #4A708B;
+    border-radius: 2px;
+}
+
+/*还没有滑上去的那片区域*/
+QSlider::add-page:horizontal {
+/*背景灰色，边框0px，粗线条，黑色，圆角*/
+    background: #575757;
+    border: 0px solid #777;
+    border-radius: 2px;
+}
+
+/*中间滑块（即我们用鼠标拖动的那个圆圈小点）*/
+QSlider::handle:horizontal
+{
+    /*背景颜色设置为辐射聚焦*/
+    background: qradialgradient(spread:pad, cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5,
+    stop:0.6 #45ADED, stop:0.8 rgba(255, 255, 255, 255));
+
+    /*形成圆*/
+    width: 8px;
+    border-radius: 4px;
+
+    /*上沿、下沿超出滑竿*/
+    margin-top: -3px;
+    margin-bottom: -2px;
+}
+
+/*中间滑块（即我们用鼠标拖动的那个圆圈小点）的鼠标悬浮事件*/
+QSlider::handle:horizontal:hover {
+    background: qradialgradient(spread:pad, cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5, stop:0 #2A8BDA,
+    stop:0.8 rgba(255, 255, 255, 255));
+
+    /*形成圆*/
+    width: 8px;
+    border-radius: 4px;
+
+    /*上沿、下沿超出滑竿*/
+    margin-top: -3px;
+    margin-bottom: -2px;
+}
+
+/*倍速下拉菜单*/
+QMenu#SpeedMenu {
+    background-color: #2e2f37;
+    border: 1px solid #555;
+    padding: 2px;
+}
+
+QMenu#SpeedMenu::item {
+    padding: 4px 20px;
+    color: white;
+}
+
+QMenu#SpeedMenu::item:selected {
+    background-color: #4169E1;
+}
+
+QMenu#SpeedMenu::item:checked {
+    color: #5DCCFF;
+}
+
+
+/*设置下拉菜单*/
+QMenu#SettingMenu {
+    background-color: #2e2f37;
+    border: 1px solid #555;
+    padding: 2px;
+}
+
+QMenu#SettingMenu::item {
+    padding: 4px 25px 4px 20px;
+    color: white;
+}
+
+QMenu#SettingMenu::item:selected {
+    background-color: #4169E1;
+    color: white;
+}
+
+QMenu#SettingMenu::item:checked {
+    color: #5DCCFF;
+}
+
+QMenu#SettingMenu::separator {
+    height: 1px;
+    background: rgb(100, 100, 100);
+    margin: 4px 8px;
+}
+
+/*播放模式子菜单*/
+QMenu#PlayModeMenu {
+    background-color: #2e2f37;
+    border: 1px solid #555;
+    padding: 2px;
+}
+
+QMenu#PlayModeMenu::item {
+    padding: 4px 25px 4px 20px;
+    color: white;
+}
+
+QMenu#PlayModeMenu::item:selected {
+    background-color: #4169E1;
+    color: white;
+}
+
+QMenu#PlayModeMenu::item:checked {
+    color: #5DCCFF;
+}
