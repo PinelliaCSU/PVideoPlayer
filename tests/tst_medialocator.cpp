@@ -6,7 +6,7 @@
 #include <QFileInfo>
 #include <QTemporaryDir>
 
-#include "../medialocator.h"
+#include "../src/media/medialocator.h"
 
 using MediaLocator::LocatorStatus;
 

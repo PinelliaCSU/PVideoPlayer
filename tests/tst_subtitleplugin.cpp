@@ -6,8 +6,8 @@
 #include <QFile>
 #include <QTemporaryDir>
 
-#include "../subtitleparser.h"
-#include "../subtitleplugin.h"
+#include "../src/subtitle/subtitleparser.h"
+#include "../src/subtitle/subtitleplugin.h"
 
 void SubtitlePluginTest::parsesSrtCues()
 {

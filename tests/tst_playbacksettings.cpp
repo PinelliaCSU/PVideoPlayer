@@ -2,7 +2,7 @@
 
 #include <QtTest>
 
-#include "../playbacksettings.h"
+#include "../src/playback/playbacksettings.h"
 
 namespace {
 constexpr int kMaxVolume = 128;

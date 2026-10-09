@@ -9,72 +9,81 @@ CONFIG += c++17
 #DEFINES += QT_DISABLE_DEPRECATED_BEFORE=0x060000    # disables all the APIs deprecated before Qt 6.0.0
 
 SOURCES += \
-    appcontroller.cpp \
-    audioextractionservice.cpp \
-    clockcontroller.cpp \
-    configutils.cpp \
-    ctrlbar.cpp \
-    customslider.cpp \
-    guiutils.cpp \
-    main.cpp \
-    mainwindow.cpp \
-    mediacomponents.cpp \
-    medialocator.cpp \
-    playbacksessionmanager.cpp \
-    playbackcoordinator.cpp \
-    playlistcoordinator.cpp \
-    medialist.cpp \
-    playbackservice.cpp \
-    playbacksettings.cpp \
-    playlist.cpp \
-    playlistmodel.cpp \
-    playlistrepository.cpp \
-    settingsrepository.cpp \
-    show.cpp \
-    sonic.cpp \
-    subtitleparser.cpp \
-    subtitleplugin.cpp \
-    title.cpp \
-    videoctrl.cpp
+    src/application/appcontroller.cpp \
+    src/application/main.cpp \
+    src/core/clockcontroller.cpp \
+    src/core/configutils.cpp \
+    src/core/settingsrepository.cpp \
+    src/media/audioextractionservice.cpp \
+    src/media/mediacomponents.cpp \
+    src/media/medialocator.cpp \
+    src/media/sonic.cpp \
+    src/media/videoctrl.cpp \
+    src/playback/playbackcoordinator.cpp \
+    src/playback/playbackservice.cpp \
+    src/playback/playbacksessionmanager.cpp \
+    src/playback/playbacksettings.cpp \
+    src/playlist/medialist.cpp \
+    src/playlist/playlist.cpp \
+    src/playlist/playlistcoordinator.cpp \
+    src/playlist/playlistmodel.cpp \
+    src/playlist/playlistrepository.cpp \
+    src/subtitle/subtitleparser.cpp \
+    src/subtitle/subtitleplugin.cpp \
+    src/ui/ctrlbar.cpp \
+    src/ui/customslider.cpp \
+    src/ui/guiutils.cpp \
+    src/ui/mainwindow.cpp \
+    src/ui/show.cpp \
+    src/ui/title.cpp
 
 HEADERS += \
-    appcontroller.h \
-    audioextractionservice.h \
-    clockcontroller.h \
-    configutils.h \
-    ctrlbar.h \
-    customslider.h \
-    datactrl.h \
-    guiutils.h \
-    mainwindow.h \
-    mediacomponents.h \
-    playbacksessionmanager.h \
-    playbackcoordinator.h \
-    playlistcoordinator.h \
-    media_types.h \
-    medialist.h \
-    media_raii.h \
-    medialocator.h \
-    playbackbackend.h \
-    playbackservice.h \
-    playbacksettings.h \
-    playlist.h \
-    playlistmodel.h \
-    playlistrepository.h \
-    settingsrepository.h \
-    subtitleparser.h \
-    subtitleplugin.h \
-    show.h \
-    sonic.h \
-    title.h \
-    videoctrl.h
+    src/application/appcontroller.h \
+    src/core/clockcontroller.h \
+    src/core/configutils.h \
+    src/core/datactrl.h \
+    src/core/media_raii.h \
+    src/core/media_types.h \
+    src/core/playbackbackend.h \
+    src/core/settingsrepository.h \
+    src/media/audioextractionservice.h \
+    src/media/mediacomponents.h \
+    src/media/medialocator.h \
+    src/media/sonic.h \
+    src/media/videoctrl.h \
+    src/playback/playbackcoordinator.h \
+    src/playback/playbackservice.h \
+    src/playback/playbacksessionmanager.h \
+    src/playback/playbacksettings.h \
+    src/playlist/medialist.h \
+    src/playlist/playlist.h \
+    src/playlist/playlistcoordinator.h \
+    src/playlist/playlistmodel.h \
+    src/playlist/playlistrepository.h \
+    src/subtitle/subtitleparser.h \
+    src/subtitle/subtitleplugin.h \
+    src/ui/ctrlbar.h \
+    src/ui/customslider.h \
+    src/ui/guiutils.h \
+    src/ui/mainwindow.h \
+    src/ui/show.h \
+    src/ui/title.h
 
 FORMS += \
-    ctrlbar.ui \
-    mainwindow.ui \
-    playlist.ui \
-    show.ui \
-    title.ui
+    src/playlist/playlist.ui \
+    src/ui/ctrlbar.ui \
+    src/ui/mainwindow.ui \
+    src/ui/show.ui \
+    src/ui/title.ui
+
+INCLUDEPATH += \
+    src/application \
+    src/core \
+    src/media \
+    src/playback \
+    src/playlist \
+    src/subtitle \
+    src/ui
 
 win32 {
     # 根据编译器位数设置架构

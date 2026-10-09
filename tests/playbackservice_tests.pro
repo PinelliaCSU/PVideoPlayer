@@ -2,7 +2,15 @@ QT += core gui widgets testlib
 CONFIG += console c++17 testcase
 TEMPLATE = app
 
-INCLUDEPATH += ..
+INCLUDEPATH += \
+    .. \
+    ../src/application \
+    ../src/core \
+    ../src/media \
+    ../src/playback \
+    ../src/playlist \
+    ../src/subtitle \
+    ../src/ui
 
 SOURCES += \
     testmain.cpp \
@@ -12,19 +20,19 @@ SOURCES += \
     tst_playbacksettings.cpp \
     tst_playlist.cpp \
     tst_subtitleplugin.cpp \
-    ../appcontroller.cpp \
-    ../configutils.cpp \
-    ../medialocator.cpp \
-    ../playbackcoordinator.cpp \
-    ../playbackservice.cpp \
-    ../playbacksessionmanager.cpp \
-    ../playbacksettings.cpp \
-    ../playlistcoordinator.cpp \
-    ../playlistmodel.cpp \
-    ../playlistrepository.cpp \
-    ../settingsrepository.cpp \
-    ../subtitleparser.cpp \
-    ../subtitleplugin.cpp
+    ../src/application/appcontroller.cpp \
+    ../src/core/configutils.cpp \
+    ../src/core/settingsrepository.cpp \
+    ../src/media/medialocator.cpp \
+    ../src/playback/playbackcoordinator.cpp \
+    ../src/playback/playbackservice.cpp \
+    ../src/playback/playbacksessionmanager.cpp \
+    ../src/playback/playbacksettings.cpp \
+    ../src/playlist/playlistcoordinator.cpp \
+    ../src/playlist/playlistmodel.cpp \
+    ../src/playlist/playlistrepository.cpp \
+    ../src/subtitle/subtitleparser.cpp \
+    ../src/subtitle/subtitleplugin.cpp
 
 HEADERS += \
     fakeplaybackbackend.h \
@@ -34,18 +42,18 @@ HEADERS += \
     tst_playbacksettings.h \
     tst_playlist.h \
     tst_subtitleplugin.h \
-    ../appcontroller.h \
-    ../configutils.h \
-    ../media_types.h \
-    ../medialocator.h \
-    ../playbackbackend.h \
-    ../playbackcoordinator.h \
-    ../playbackservice.h \
-    ../playbacksessionmanager.h \
-    ../playbacksettings.h \
-    ../playlistcoordinator.h \
-    ../playlistmodel.h \
-    ../playlistrepository.h \
-    ../settingsrepository.h \
-    ../subtitleparser.h \
-    ../subtitleplugin.h
+    ../src/application/appcontroller.h \
+    ../src/core/configutils.h \
+    ../src/core/media_types.h \
+    ../src/core/playbackbackend.h \
+    ../src/core/settingsrepository.h \
+    ../src/media/medialocator.h \
+    ../src/playback/playbackcoordinator.h \
+    ../src/playback/playbackservice.h \
+    ../src/playback/playbacksessionmanager.h \
+    ../src/playback/playbacksettings.h \
+    ../src/playlist/playlistcoordinator.h \
+    ../src/playlist/playlistmodel.h \
+    ../src/playlist/playlistrepository.h \
+    ../src/subtitle/subtitleparser.h \
+    ../src/subtitle/subtitleplugin.h

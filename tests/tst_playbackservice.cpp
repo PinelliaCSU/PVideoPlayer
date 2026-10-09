@@ -4,8 +4,8 @@
 #include <QSignalSpy>
 #include <QThread>
 
-#include "../playbackservice.h"
-#include "../playbacksessionmanager.h"
+#include "../src/playback/playbackservice.h"
+#include "../src/playback/playbacksessionmanager.h"
 #include "fakeplaybackbackend.h"
 
 void PlaybackServiceTest::commandsAreForwardedAndStateIsUpdated()

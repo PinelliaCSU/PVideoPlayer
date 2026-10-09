@@ -4,9 +4,9 @@
 #include <QSignalSpy>
 #include <QTemporaryDir>
 
-#include "../appcontroller.h"
-#include "../playlistmodel.h"
-#include "../playlistrepository.h"
+#include "../src/application/appcontroller.h"
+#include "../src/playlist/playlistmodel.h"
+#include "../src/playlist/playlistrepository.h"
 #include "fakeplaybackbackend.h"
 
 namespace {

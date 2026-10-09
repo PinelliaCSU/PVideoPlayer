@@ -1,7 +1,7 @@
 #ifndef FAKEPLAYBACKBACKEND_H
 #define FAKEPLAYBACKBACKEND_H
 
-#include "../playbackbackend.h"
+#include "../src/core/playbackbackend.h"
 
 class FakePlaybackBackend final : public PlaybackEventSource, public IPlaybackBackend
 {

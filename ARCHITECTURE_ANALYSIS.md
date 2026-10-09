@@ -43,21 +43,21 @@ PVideoPlayer 当前是一个 **Qt Widgets 桌面播放器外壳 + FFmpeg 解码�
 | 持久化 | `QSettings` INI |
 | 全局状态 | `VideoCtrl::GetInstance()` 单例，另有全局 FFmpeg/SDL 状态和互斥量 |
 
-依据文件：[`PVideoPlayer.pro`](./PVideoPlayer.pro)、[`main.cpp`](./main.cpp)、[`videoctrl.h`](./videoctrl.h)、[`datactrl.h`](./datactrl.h)。
+依据文件：[`PVideoPlayer.pro`](./PVideoPlayer.pro)、[`main.cpp`](./src/application/main.cpp)、[`videoctrl.h`](./src/media/videoctrl.h)、[`datactrl.h`](./src/core/datactrl.h)。
 
 ### 2.2 已实现功能模块
 
 | 模块 | 现有能力 | 主要代码 |
 |---|---|---|
-| 应用启动/窗口 | QApplication、无边框窗口、拖动、最大化/全屏、菜单 | [`main.cpp`](./main.cpp)、[`mainwindow.cpp`](./mainwindow.cpp) |
-| 播放列表 | 添加/移除/清空、双击播放、拖拽、列表循环/顺序/单曲/随机 | [`playlist.cpp`](./playlist.cpp)、[`medialist.cpp`](./medialist.cpp) |
-| 播放控制 | 播放/暂停/停止、前后切换、seek、音量、倍速、逐帧 | [`ctrlbar.cpp`](./ctrlbar.cpp)、[`videoctrl.cpp`](./videoctrl.cpp) |
-| 媒体引擎 | demux、音视频解码、队列、时钟同步、seek、流切换基础 | [`videoctrl.cpp`](./videoctrl.cpp)、[`datactrl.h`](./datactrl.h) |
-| 视频显示 | SDL renderer/texture、等比缩放、嵌入 QWidget、最后一帧保留 | [`show.cpp`](./show.cpp)、[`videoctrl.cpp`](./videoctrl.cpp) |
-| 音频输出 | SDL audio callback、重采样、音量和倍速相关处理 | [`videoctrl.cpp`](./videoctrl.cpp)、[`sonic.cpp`](./sonic.cpp) |
-| 用户体验 | QSS、FontAwesome、Toast、快捷键、拖放 | [`guiutils.cpp`](./guiutils.cpp)、[`res/qss/`](./res/qss/) |
-| 数据持久化 | 音量、播放列表、播放位置、播放历史 | [`configutils.cpp`](./configutils.cpp) |
-| 媒体处理 | 从视频中提取音频 | [`videoctrl.cpp`](./videoctrl.cpp) |
+| 应用启动/窗口 | QApplication、无边框窗口、拖动、最大化/全屏、菜单 | [`main.cpp`](./src/application/main.cpp)、[`mainwindow.cpp`](./src/ui/mainwindow.cpp) |
+| 播放列表 | 添加/移除/清空、双击播放、拖拽、列表循环/顺序/单曲/随机 | [`playlist.cpp`](./src/playlist/playlist.cpp)、[`medialist.cpp`](./src/playlist/medialist.cpp) |
+| 播放控制 | 播放/暂停/停止、前后切换、seek、音量、倍速、逐帧 | [`ctrlbar.cpp`](./src/ui/ctrlbar.cpp)、[`videoctrl.cpp`](./src/media/videoctrl.cpp) |
+| 媒体引擎 | demux、音视频解码、队列、时钟同步、seek、流切换基础 | [`videoctrl.cpp`](./src/media/videoctrl.cpp)、[`datactrl.h`](./src/core/datactrl.h) |
+| 视频显示 | SDL renderer/texture、等比缩放、嵌入 QWidget、最后一帧保留 | [`show.cpp`](./src/ui/show.cpp)、[`videoctrl.cpp`](./src/media/videoctrl.cpp) |
+| 音频输出 | SDL audio callback、重采样、音量和倍速相关处理 | [`videoctrl.cpp`](./src/media/videoctrl.cpp)、[`sonic.cpp`](./src/media/sonic.cpp) |
+| 用户体验 | QSS、FontAwesome、Toast、快捷键、拖放 | [`guiutils.cpp`](./src/ui/guiutils.cpp)、[`res/qss/`](./res/qss/) |
+| 数据持久化 | 音量、播放列表、播放位置、播放历史 | [`configutils.cpp`](./src/core/configutils.cpp) |
+| 媒体处理 | 从视频中提取音频 | [`videoctrl.cpp`](./src/media/videoctrl.cpp) |
 
 ### 2.3 架构分类
 

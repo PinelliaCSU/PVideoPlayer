@@ -3,9 +3,9 @@
 #include <QtTest>
 #include <QSignalSpy>
 
-#include "../media_types.h"
-#include "../playlistcoordinator.h"
-#include "../playlistmodel.h"
+#include "../src/core/media_types.h"
+#include "../src/playlist/playlistcoordinator.h"
+#include "../src/playlist/playlistmodel.h"
 
 namespace {
 MediaItem makeItem(const QString &locator)
