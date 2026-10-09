@@ -7,6 +7,7 @@
 #include <QVBoxLayout>
 #include <QPropertyAnimation>
 #include <QGraphicsOpacityEffect>
+#include <QPainter>
 #include "guiutils.h"
 #include "playbackbackend.h"
 
@@ -22,8 +23,6 @@ Show::Show(QWidget *parent)
     setAcceptDrops(true);
 
     this->setAttribute(Qt::WA_OpaquePaintEvent);
-    //    防止 Qt 自动刷新 QLabel
-    ui->label->setUpdatesEnabled(false);
 
     _nLastFrameWidth = 0;
     _nLastFrameHeight = 0;
@@ -99,6 +98,15 @@ void Show::dropEvent(QDropEvent *event)
 void Show::dragEnterEvent(QDragEnterEvent *event)
 {
     event->acceptProposedAction();
+}
+
+void Show::paintEvent(QPaintEvent *event)
+{
+    Q_UNUSED(event);
+
+    // 空闲时没有 SDL 渲染循环，必须由 Qt 主动绘制视频区域背景。
+    QPainter painter(this);
+    painter.fillRect(rect(), Qt::black);
 }
 
 void Show::resizeEvent(QResizeEvent *event)
@@ -251,6 +259,8 @@ void Show::ChangeShow(){
     qDebug() << "Show::ChangeShow - size:" << width() << "x" << height() << "frame:" << _nLastFrameWidth << "x" << _nLastFrameHeight;
     // 让 label 铺满整个 Show widget，SDL 内部自行处理等比缩放和居中
     ui->label->setGeometry(0, 0, width(), height());
+    ui->label->update();
+    update();
     g_show_rect_mutex.unlock();
 }
 

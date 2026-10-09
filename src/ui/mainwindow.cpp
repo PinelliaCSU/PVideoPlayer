@@ -263,15 +263,14 @@ void MainWindow::SlotOnMenuBtnClicked()
 }
 
 void MainWindow::SlotOnPlayListCtrlBtnClicked(){
+    int listWidth = ui->Playlist->width();
     if(ui->Playlist->isHidden()) {
-        int listWidth = ui->Playlist->width();
         ui->Playlist->show();
         // 窗口如果是常规状态，将其宽度加上列表宽度
         if (!this->isMaximized() && !this->isFullScreen()) {
             this->resize(this->width() + listWidth, this->height());
         }
     } else {
-        int listWidth = ui->Playlist->width();
         ui->Playlist->hide();
         // 隐藏时，立刻缩小窗口宽度避免残影
         if (!this->isMaximized() && !this->isFullScreen()) {
@@ -283,7 +282,6 @@ void MainWindow::SlotOnPlayListCtrlBtnClicked(){
             ui->show->setAttribute(Qt::WA_OpaquePaintEvent, true);
         }
     }
-
 }
 
 void MainWindow::initMenu(){

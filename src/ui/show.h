@@ -41,6 +41,7 @@ public:
 protected:
     void dropEvent(QDropEvent *event);
     void dragEnterEvent(QDragEnterEvent *event);
+    void paintEvent(QPaintEvent *event);
     void resizeEvent(QResizeEvent *event);
     void keyReleaseEvent(QKeyEvent *event); // 键盘事件处理
     bool eventFilter(QObject *obj, QEvent *event);
