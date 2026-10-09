@@ -8,7 +8,7 @@
 #include <QPropertyAnimation>
 #include <QGraphicsOpacityEffect>
 #include "guiutils.h"
-#include "playbackservice.h"
+#include "playbackbackend.h"
 
 
 extern QMutex g_show_rect_mutex;
@@ -70,23 +70,14 @@ bool Show::Init(){
     return true;
 }
 
-void Show::SetPlaybackService(PlaybackService *service)
+void Show::SetPlaybackTarget(IPlaybackTarget *target)
 {
-    _playback_service = service;
+    _playback_target = target;
 }
 
-void Show::OnPlay(QString strFile){
-    // 防御性编程
-    if(strFile.isEmpty()) {
-        qDebug() << "Show::OnPlay: strFile is empty";
-        return;
-    }
-    //    todo：在这里或者在其他地方必须校验必须是可播放的视频文件，而且当前文件得存在，不能突然被删除了。防止打开失败导致程序崩溃
-    if (_playback_service == nullptr) {
-        qWarning() << "Show::OnPlay: playback service is not configured";
-        return;
-    }
-    _playback_service->start(strFile, ui->label->winId());
+WId Show::renderTarget() const
+{
+    return ui->label->winId();
 }
 
 
@@ -219,7 +210,6 @@ bool Show::connectionSignalSlots()
 {
     bool bRet = true;
 
-    bRet = connect(this, &Show::SigPlay, this, &Show::OnPlay);
     connect(_toastTimer, &QTimer::timeout, this, &Show::OnToastTimeout);
     connect(_shortcutHintTimer, &QTimer::timeout, this, &Show::OnShortcutHintTimeout);
     // 在视频画面上右键可切换画中画
@@ -393,8 +383,8 @@ void Show::SetPipActive(bool active)
     }
 
     // 播放会话保持不变，仅把渲染目标切换到视频容器当前所在的窗口
-    if (_playback_service) {
-        _playback_service->setRenderTarget(ui->label->winId());
+    if (_playback_target) {
+        _playback_target->setRenderTarget(ui->label->winId());
     }
 
     emit SigPipActiveChanged(_pipActive);

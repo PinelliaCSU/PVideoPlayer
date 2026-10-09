@@ -1,6 +1,7 @@
 #include "playbackservice.h"
 
 #include <QMetaObject>
+#include <QMutexLocker>
 #include <QThread>
 
 PlaybackService::PlaybackService(PlaybackEventSource *events,
@@ -13,37 +14,48 @@ PlaybackService::PlaybackService(PlaybackEventSource *events,
     Q_ASSERT(m_events != nullptr);
     Q_ASSERT(m_backend != nullptr);
 
+    /*
+     * 后端事件 → 状态转换。
+     * 这些连接在后端线程（SDL 读取/渲染线程）发出信号时会自动排队到服务线程执行，
+     * 因此状态写入始终发生在服务线程内，UI 线程只读取 state() 快照。
+     */
     connect(m_events, &PlaybackEventSource::SigStartPlay, this, [this](const QString &locator) {
-        m_state.currentLocator = locator;
-        m_state.status = PlaybackStatus::Opening;
+        mutateState([&locator](PlaybackState &state) {
+            state.currentLocator = locator;
+            state.status = PlaybackStatus::Opening;
+            state.errorCode = PlaybackErrorCode::None;
+            state.errorMessage.clear();
+        });
         emit started(locator);
     });
     connect(m_events, &PlaybackEventSource::SigSpeed, this, [this](float speed) {
-        m_state.speed = speed;
+        mutateState([speed](PlaybackState &state) { state.speed = speed; });
         emit speedChanged(speed);
     });
     connect(m_events, &PlaybackEventSource::SigPauseStat, this, [this](bool paused) {
-        m_state.status = paused ? PlaybackStatus::Paused : PlaybackStatus::Playing;
+        mutateState([paused](PlaybackState &state) {
+            state.status = paused ? PlaybackStatus::Paused : PlaybackStatus::Playing;
+        });
         emit pauseChanged(paused);
     });
     connect(m_events, &PlaybackEventSource::SigStopFinished, this, [this]() {
-        m_state.status = PlaybackStatus::Finished;
+        mutateState([](PlaybackState &state) { state.status = PlaybackStatus::Finished; });
         emit finished();
     });
     connect(m_events, &PlaybackEventSource::SigUserStopFinished, this, [this]() {
-        m_state.status = PlaybackStatus::Idle;
+        mutateState([](PlaybackState &state) { state.status = PlaybackStatus::Idle; });
         emit userStopped();
     });
     connect(m_events, &PlaybackEventSource::SigVideoTotalSeconds, this, [this](int seconds) {
-        m_state.durationSeconds = seconds;
+        mutateState([seconds](PlaybackState &state) { state.durationSeconds = seconds; });
         emit totalSecondsChanged(seconds);
     });
     connect(m_events, &PlaybackEventSource::SigVideoPlaySeconds, this, [this](int seconds) {
-        m_state.positionSeconds = seconds;
+        mutateState([seconds](PlaybackState &state) { state.positionSeconds = seconds; });
         emit positionSecondsChanged(seconds);
     });
     connect(m_events, &PlaybackEventSource::SigVideoVolume, this, [this](double percent) {
-        m_state.volume = percent;
+        mutateState([percent](PlaybackState &state) { state.volume = percent; });
         emit volumeChanged(percent);
     });
     connect(m_events, &PlaybackEventSource::SigFrameDimensionsChanged,
@@ -53,8 +65,7 @@ PlaybackService::PlaybackService(PlaybackEventSource *events,
     connect(m_events, &PlaybackEventSource::SigSeekBackCompleted,
             this, &PlaybackService::seekBackCompleted);
     connect(m_events, &PlaybackEventSource::SigError, this, [this](const QString &message) {
-        m_state.status = PlaybackStatus::Error;
-        emit errorOccurred(message);
+        reportError(PlaybackErrorCode::InternalError, message);
     });
 }
 
@@ -68,7 +79,7 @@ PlaybackService::~PlaybackService()
 void PlaybackService::start(const QString &locator, WId playWidgetId)
 {
     if (locator.isEmpty()) {
-        emit errorOccurred(tr("媒体地址为空"));
+        reportError(PlaybackErrorCode::InvalidLocator, tr("媒体地址为空"));
         return;
     }
     enqueue([this, locator, playWidgetId]() {
@@ -131,9 +142,12 @@ void PlaybackService::step()
     enqueue([this]() { m_backend->OnStep(); });
 }
 
-bool PlaybackService::extractAudio(const QString &inputFile, const QString &outputFile)
+void PlaybackService::extractAudio(const QString &inputFile, const QString &outputFile)
 {
-    return m_backend->OnExtractAudio(inputFile, outputFile);
+    enqueue([this, inputFile, outputFile]() {
+        const bool success = m_backend->OnExtractAudio(inputFile, outputFile);
+        emit audioExtractionFinished(success, inputFile, outputFile);
+    });
 }
 
 void PlaybackService::setRenderTarget(WId playWidgetId)
@@ -143,7 +157,39 @@ void PlaybackService::setRenderTarget(WId playWidgetId)
 
 PlaybackState PlaybackService::state() const
 {
+    QMutexLocker locker(&m_stateMutex);
     return m_state;
+}
+
+bool PlaybackService::isPlaying() const
+{
+    const PlaybackStatus status = state().status;
+    return status == PlaybackStatus::Playing || status == PlaybackStatus::Seeking;
+}
+
+void PlaybackService::mutateState(const std::function<void(PlaybackState &)> &mutation)
+{
+    {
+        QMutexLocker locker(&m_stateMutex);
+        mutation(m_state);
+    }
+    publishState();
+}
+
+void PlaybackService::publishState()
+{
+    emit stateChanged(state());
+}
+
+void PlaybackService::reportError(PlaybackErrorCode code, const QString &message)
+{
+    mutateState([code, &message](PlaybackState &state) {
+        state.status = PlaybackStatus::Error;
+        state.errorCode = code;
+        state.errorMessage = message;
+    });
+    emit errorOccurred(message);
+    emit playbackError(code, message);
 }
 
 void PlaybackService::enqueue(std::function<void()> command)

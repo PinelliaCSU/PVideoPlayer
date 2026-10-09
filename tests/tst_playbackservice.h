@@ -10,8 +10,13 @@ class PlaybackServiceTest : public QObject
 private slots:
     void commandsAreForwardedAndStateIsUpdated();
     void emptyLocatorRaisesError();
+    void backendErrorIsPublishedAsStateAndSignal();
+    void stateChangedTracksBackendEvents();
     void commandsFromAnotherThreadAreSerialized();
     void sessionsAreIndependent();
+    void sessionCommandsRunOnCommandThread();
+    void audioExtractionIsAsynchronous();
+    void continuousCommandsKeepStateConsistent();
     void renderTargetCommandIsForwarded();
 };
 

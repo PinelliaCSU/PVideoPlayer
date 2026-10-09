@@ -37,7 +37,7 @@
  <customwidgets>
   <customwidget>
    <class>MediaList</class>
-   <extends>QListWidget</extends>
+   <extends>QListView</extends>
    <header location="global">medialist.h</header>
   </customwidget>
  </customwidgets>

@@ -13,17 +13,15 @@
 
 #include "datactrl.h"
 #include "sonic.h"
+#include "media_types.h"
 #include "playbackbackend.h"
 #include "clockcontroller.h"
 #include "media_raii.h"
 #include "audioextractionservice.h"
 #include "mediacomponents.h"
+#include "playbacksettings.h"
 
 
-#define PLAYBACK_RATE_MIN           (0.25)     // 最慢
-#define PLAYBACK_RATE_MAX           (3.0)     // 最快
-#define PLAYBACK_RATE_RESET         (1.0)     //默认播放速度
-#define PLAYBACK_RATE_SCALE         (0.25)    // 变速刻度
 #define NORMAL_SAMPLE_RATES         (44100)  // 默认采样率
 #define NORMAL_CHANNELS             (2)     // 默认声道数
 
@@ -34,7 +32,10 @@ public:
 
     void start_play(QString filename, WId play_wid) override;
     ~VideoCtrl();
-    static VideoCtrl *GetInstance();
+
+    // 显式创建播放后端：由组合根（main/CreateDefaultPlaybackBackend）调用，
+    // 生命周期通过 parent 的父子关系管理，初始化失败时返回 nullptr。
+    static VideoCtrl *create(QObject *parent = nullptr);
 
     int audio_decode_frame(VideoState *is);
     void set_clock_at(Clock *c, double pts, int serial, double time);
@@ -122,7 +123,6 @@ private:
     void sub_volume();
     void update_speed(float speed);
 private:
-    static VideoCtrl* m_instance;
     bool m_init;
     bool m_play_loop;
     std::thread m_play_loop_thread;
@@ -134,11 +134,9 @@ private:
     int m_frame_width;
     int m_frame_height;
 
-    int m_startup_volume;
     bool m_is_full_screen;
 
-    float m_playback_rate; //播放速度
-    bool m_playback_changed; //播放速度是否改变
+    PlaybackSettings m_settings; // 倍速、音量与逐帧强制播放标记
     WId m_play_wid;//播放窗口
     bool m_stop_emitted; //标记是否已经发送过停止信号
     QString m_current_file; // 当前播放文件路径
@@ -157,7 +155,11 @@ private:
     std::atomic<bool> m_rebind_pending{false};
     std::atomic<quintptr> m_pending_wid{0};
 
-    bool m_audio_force_play = true;//音频强制播放一帧，配合step使用
+    // 会话代际：每次开始新播放时递增。旧会话线程在代际更新后发出的所有事件都会被丢弃，
+    // 避免上一个文件播放结束时排队到达的信号覆盖新文件的播放状态。
+    SessionEpoch m_session;
+    bool isCurrentSession(const VideoState *is) const;
+
 public:
     sonicStreamStruct* m_audio_speed_convert;
 };

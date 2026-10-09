@@ -31,6 +31,9 @@ extern "C"{
 }
 
 
+// 前置声明：VideoState 需要反向引用其拥有者，供 SDL 音频回调调用解码方法
+class VideoCtrl;
+
 #define MAX_QUEUE_SIZE (15 * 1024 * 1024)
 #define MIN_FRAMES 25
 #define EXTERNAL_CLOCK_MIN_FRAMES 2
@@ -284,6 +287,12 @@ typedef struct VideoState {
 
     SDL_cond *continue_read_thread;
     SdlCondPtr owned_continue_read_thread;
+
+    // SDL 音频回调只拿到本结构体指针，用它取回拥有者实例（替代旧的 VideoCtrl 单例）
+    VideoCtrl *controller = nullptr;
+
+    // 会话代际：创建本会话时的代际号。代际不匹配时，其线程产生的事件属于上一个文件，必须丢弃。
+    int session_epoch = 0;
 } VideoState;
 
 

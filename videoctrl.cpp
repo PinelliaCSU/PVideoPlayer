@@ -3,6 +3,7 @@
 //
 
 #include "videoctrl.h"
+#include <QCoreApplication>
 #include<QFile>
 #include<iostream>
 #include<QFileInfo>
@@ -160,10 +161,7 @@ VideoCtrl::VideoCtrl(QObject *parent):
     m_screen_height(0),
     m_frame_width(0),
     m_frame_height(0),
-    m_startup_volume(50),
     m_is_full_screen(false),
-    m_playback_rate(PLAYBACK_RATE_RESET),
-    m_playback_changed(false),
     m_audio_speed_convert(nullptr),
     m_stop_emitted(false),
     m_video_open(false),
@@ -171,8 +169,7 @@ VideoCtrl::VideoCtrl(QObject *parent):
     m_frame_flip_v(false),
     m_last_frame(nullptr),
     m_idle_loop(false),
-    m_user_stop(false),
-    m_audio_force_play(true){
+    m_user_stop(false){
 }
 
 bool VideoCtrl::init() {
@@ -237,6 +234,12 @@ VideoCtrl::~VideoCtrl() {
 
 void VideoCtrl::start_play(QString filename, WId play_wid) {
 
+    /*
+     * 先递增会话代际：旧会话线程（正在被 join 的 read/loop 线程）在停止过程中发出的事件
+     * 会立即被判定为过期事件，不再投递给播放服务，避免污染新文件的播放状态。
+     */
+    m_session.begin();
+
     m_play_loop = false;
 
     // 停止空闲事件循环（如果正在运行）
@@ -273,21 +276,32 @@ void VideoCtrl::start_play(QString filename, WId play_wid) {
     return;
 }
 
-VideoCtrl *VideoCtrl::m_instance = new VideoCtrl();
-
-VideoCtrl * VideoCtrl::GetInstance() {
-    if (false == m_instance->init()) {
+VideoCtrl *VideoCtrl::create(QObject *parent)
+{
+    VideoCtrl *controller = new (std::nothrow) VideoCtrl(parent);
+    if (!controller) {
         return nullptr;
     }
-    return m_instance;
+    if (!controller->init()) {
+        delete controller;
+        return nullptr;
+    }
+    return controller;
+}
+
+bool VideoCtrl::isCurrentSession(const VideoState *is) const
+{
+    return is != nullptr && m_session.matches(is->session_epoch);
 }
 
 PlaybackBackendBundle CreateDefaultPlaybackBackend()
 {
-    VideoCtrl *instance = VideoCtrl::GetInstance();
+    // 组合根调用：后端由 QApplication 持有，随应用退出统一销毁
+    VideoCtrl *controller = VideoCtrl::create(QCoreApplication::instance());
+
     PlaybackBackendBundle bundle;
-    bundle.events = instance;
-    bundle.backend = instance;
+    bundle.events = controller;
+    bundle.backend = controller;
     return bundle;
 }
 
@@ -302,6 +316,10 @@ VideoState * VideoCtrl::stream_open(const char *filename) {
     is->last_audio_stream = is->audio_stream = -1;
 
     is->filename = filename;
+    // SDL 音频回调通过该反向引用取回拥有者实例
+    is->controller = this;
+    // 记录本会话所属代际，供各工作线程判定事件是否仍然有效
+    is->session_epoch = m_session.current();
 
     // 窗口起始位置
     is->ytop = 0;
@@ -337,15 +355,8 @@ VideoState * VideoCtrl::stream_open(const char *filename) {
     init_clock(&is->audclk, &is->audioq.serial);
     is->audio_clock_serial = -1;
 
-    // 防御性编程，音量只能设置在0~100
-    if (m_startup_volume < 0)
-        av_log_info("volume=%d < 0, setting to 0\n", m_startup_volume);
-    if (m_startup_volume > 100)
-        av_log_info("volume=%d > 100, setting to 100\n", m_startup_volume);
-    m_startup_volume = av_clip(m_startup_volume, 0, 100);
-    // 将我们的音量比转换为 SDL 的音量比
-    m_startup_volume = av_clip(SDL_MIX_MAXVOLUME * m_startup_volume / 100, 0, SDL_MIX_MAXVOLUME);
-    is->audio_volume = m_startup_volume;
+    // 当前音量（0.0~1.0 的比值）换算为 SDL 音量刻度
+    is->audio_volume = m_settings.volumeFor(SDL_MIX_MAXVOLUME);
 
     //    启动播放的时候需要更新下界面ui的播放状态
     emit SigPauseStat(is->paused);
@@ -464,7 +475,9 @@ void VideoCtrl::read_thread(VideoState *is) {
 
     is->realtime = is_realtime(ic);
 
-    emit SigVideoTotalSeconds(ic->duration / AV_TIME_BASE);
+    if (isCurrentSession(is)) {
+        emit SigVideoTotalSeconds(ic->duration / AV_TIME_BASE);
+    }
 
     // 如果有自己期望的视频流，那么这里就先尝试使用期望的视频流
     for (int i = 0; i < ic->nb_streams; i++) {
@@ -617,7 +630,7 @@ void VideoCtrl::read_thread(VideoState *is) {
              * mark：使用标志位确保 SigStop 只发送一次，防止在 abort_request 被设置之前重复触发。
              * 流程：这里发射 SigStop → OnStop 设置 m_play_loop=false → loop_thread 退出循环 → do_exit 设置 abort_request=1 → 这里 while 循环检测到 abort_request 后 break
              */
-            if (!m_stop_emitted) {
+            if (!m_stop_emitted && isCurrentSession(is)) {
                 m_stop_emitted = true;
                 emit SigStop();
             }
@@ -848,7 +861,11 @@ void sdl_audio_callback(void *opaque, Uint8 *stream, int len) {
     VideoState *is = (VideoState*)opaque;
 
     int audio_size, len1;
-    VideoCtrl *VideoCtrl = VideoCtrl::GetInstance();
+    VideoCtrl *controller = is->controller;
+    if (!controller) {
+        SDL_memset(stream, 0, static_cast<size_t>(len));
+        return;
+    }
     /*
      * mark: 我们需要在while循环前设置这个时间
      */
@@ -857,7 +874,7 @@ void sdl_audio_callback(void *opaque, Uint8 *stream, int len) {
     while (len > 0) {
         // 如果音频buf已经用完，那么就重新获取数据
         if (is->audio_buf_index >= is->audio_buf_size) {
-            audio_size = VideoCtrl->audio_decode_frame(is);
+            audio_size = controller->audio_decode_frame(is);
             // 如果获取数据失败，那么就设置一个默认静音数据
             if (audio_size < 0) {
                 is->audio_buf = nullptr;
@@ -872,45 +889,45 @@ void sdl_audio_callback(void *opaque, Uint8 *stream, int len) {
              * 所以我们这边要对给的数据进行倍数处理，处理结束后，音频倍数就
              */
             // 倍数是否发生了改变，如果发生了改变，那么 sonic 对象需要重新创建，因为 sonic 的倍数是固定的
-            if (VideoCtrl->get_playback_change()) {
+            if (controller->get_playback_change()) {
                 // 如果有sonic对象，那么需要先销毁 sonic---因为这个是老的配置，现在需要给sonic新的配置
-                if (VideoCtrl->m_audio_speed_convert) {
-                    sonicDestroyStream(VideoCtrl->m_audio_speed_convert);
+                if (controller->m_audio_speed_convert) {
+                    sonicDestroyStream(controller->m_audio_speed_convert);
                 }
                 // 创建新sonic
-                VideoCtrl->m_audio_speed_convert = sonicCreateStream(VideoCtrl->get_target_frequency(), VideoCtrl->get_target_channels());
+                controller->m_audio_speed_convert = sonicCreateStream(controller->get_target_frequency(), controller->get_target_channels());
                 // 设置变速系数
-                sonicSetSpeed(VideoCtrl->m_audio_speed_convert, VideoCtrl->get_playback_rate());
-                sonicSetPitch(VideoCtrl->m_audio_speed_convert, 1.0);
-                sonicSetRate(VideoCtrl->m_audio_speed_convert, 1.0);
+                sonicSetSpeed(controller->m_audio_speed_convert, controller->get_playback_rate());
+                sonicSetPitch(controller->m_audio_speed_convert, 1.0);
+                sonicSetRate(controller->m_audio_speed_convert, 1.0);
                 // 标记倍数改变事件处理结束 -- sonic 对象重新创建结束
-                VideoCtrl->set_playback_change(false);
+                controller->set_playback_change(false);
             }
             /*
              * mark: 如果 Sonic 对象为空且需要变速播放，则立即创建
              * 比如启动的播放的时候倍数就是非常规倍数，此时 is_normal_playback_rate 是 false，但是上面的 get_playback_change 是fasle，并没有创建 sonic 对象，所以我们可以拦截到这种异常情况
              * 或者切换音频流的时候，情况和上面是一样的
              */
-            if (!VideoCtrl->is_normal_playback_rate() && !VideoCtrl->m_audio_speed_convert) {
-                VideoCtrl->m_audio_speed_convert = sonicCreateStream(VideoCtrl->get_target_frequency(), VideoCtrl->get_target_channels());
-                sonicSetSpeed(VideoCtrl->m_audio_speed_convert, VideoCtrl->get_playback_rate());
-                sonicSetPitch(VideoCtrl->m_audio_speed_convert, 1.0);
-                sonicSetRate(VideoCtrl->m_audio_speed_convert, 1.0);
+            if (!controller->is_normal_playback_rate() && !controller->m_audio_speed_convert) {
+                controller->m_audio_speed_convert = sonicCreateStream(controller->get_target_frequency(), controller->get_target_channels());
+                sonicSetSpeed(controller->m_audio_speed_convert, controller->get_playback_rate());
+                sonicSetPitch(controller->m_audio_speed_convert, 1.0);
+                sonicSetRate(controller->m_audio_speed_convert, 1.0);
             }
             // 是否需要做倍数处理，如果倍数不是1倍，且有音频数据，那么使用sonic对 audio_buf 进行转换得到倍数后的新音频数据
-            if (!VideoCtrl->is_normal_playback_rate() && is->audio_buf) {
+            if (!controller->is_normal_playback_rate() && is->audio_buf) {
                 // 计算 swr_convert 实际返回了多少个样本
                 int actual_out_samples = is->audio_buf_size / (is->audio_tgt.channels * av_get_bytes_per_sample(is->audio_tgt.fmt));
 
                 int ret = 0, out_size = 0, nb_samples = 0, sonic_samples = 0;
                 if (is->audio_tgt.fmt == AV_SAMPLE_FMT_FLT) {
-                    ret = sonicWriteFloatToStream(VideoCtrl->m_audio_speed_convert, (float*)is->audio_buf, actual_out_samples);
+                    ret = sonicWriteFloatToStream(controller->m_audio_speed_convert, (float*)is->audio_buf, actual_out_samples);
                 } else if (is->audio_tgt.fmt == AV_SAMPLE_FMT_S16) {
-                    ret = sonicWriteShortToStream(VideoCtrl->m_audio_speed_convert, (short*)is->audio_buf, actual_out_samples);
+                    ret = sonicWriteShortToStream(controller->m_audio_speed_convert, (short*)is->audio_buf, actual_out_samples);
                 } else {
                     av_log_error("sonic not support fmt:%d", is->audio_tgt.fmt);
                 }
-                nb_samples = sonicSamplesAvailable(VideoCtrl->m_audio_speed_convert);
+                nb_samples = sonicSamplesAvailable(controller->m_audio_speed_convert);
                 out_size = nb_samples * av_get_bytes_per_sample(is->audio_tgt.fmt) * is->audio_tgt.channels;
                 // 为 audio_buf1 分配足够的内存空间
                 av_fast_malloc(&is->audio_buf1, &is->audio_buf1_size, out_size);
@@ -921,9 +938,9 @@ void sdl_audio_callback(void *opaque, Uint8 *stream, int len) {
                 // 如果将原始的音频数据 audio_buf 写入 sonic 失败，那么也就不需要从 sonic 读取处理后的音频数据了 —— 毕竟已经失败了
                 if (ret) {
                     if (is->audio_tgt.fmt == AV_SAMPLE_FMT_FLT) {
-                        sonic_samples = sonicReadFloatFromStream(VideoCtrl->m_audio_speed_convert, (float*)is->audio_buf1, nb_samples);
+                        sonic_samples = sonicReadFloatFromStream(controller->m_audio_speed_convert, (float*)is->audio_buf1, nb_samples);
                     } else if (is->audio_tgt.fmt == AV_SAMPLE_FMT_S16) {
-                        sonic_samples = sonicReadShortFromStream(VideoCtrl->m_audio_speed_convert, (short*)is->audio_buf1, nb_samples);
+                        sonic_samples = sonicReadShortFromStream(controller->m_audio_speed_convert, (short*)is->audio_buf1, nb_samples);
                     } else {
                         av_log_error("sonic not support fmt:%d", is->audio_tgt.fmt);
                     }
@@ -979,10 +996,10 @@ void sdl_audio_callback(void *opaque, Uint8 *stream, int len) {
         * 2x时，缓冲区0.05s实时 = 0.1s媒体时间，所以当前听到的是 audio_clock - 0.1
         */
         // todo: audio_clock - (double)(2 * is->audio_hw_buf_size + is->audio_write_buf_size) / is->audio_tgt.bytes_per_sec 公式为什么就是 pts了
-        VideoCtrl->set_clock_at(&is->audclk, is->audio_clock - (double)(2 * is->audio_hw_buf_size + is->audio_write_buf_size) / is->audio_tgt.bytes_per_sec * VideoCtrl->get_playback_rate(),
+        controller->set_clock_at(&is->audclk, is->audio_clock - (double)(2 * is->audio_hw_buf_size + is->audio_write_buf_size) / is->audio_tgt.bytes_per_sec * controller->get_playback_rate(),
                                is->audio_clock_serial, g_audio_callback_time / 1000000.0);
     }
-    // av_log_info("callback video_clk=%f, audio_clk=%f, pts=%f, is->audio_clock=%f, sdl_buf = %f, bytes_per_sec=%d\n", VideoCtrl->get_clock(&is->vidclk), VideoCtrl->get_clock(&is->audclk),is->audio_clock - (double)(2 * is->audio_hw_buf_size + is->audio_write_buf_size) / is->audio_tgt.bytes_per_sec, is->audio_clock, (double)(2 * is->audio_hw_buf_size + is->audio_write_buf_size), is->audio_tgt.bytes_per_sec);
+    // av_log_info("callback video_clk=%f, audio_clk=%f, pts=%f, is->audio_clock=%f, sdl_buf = %f, bytes_per_sec=%d\n", controller->get_clock(&is->vidclk), controller->get_clock(&is->audclk),is->audio_clock - (double)(2 * is->audio_hw_buf_size + is->audio_write_buf_size) / is->audio_tgt.bytes_per_sec, is->audio_clock, (double)(2 * is->audio_hw_buf_size + is->audio_write_buf_size), is->audio_tgt.bytes_per_sec);
 
 }
 
@@ -1169,7 +1186,7 @@ int VideoCtrl::audio_decode_frame(VideoState *is) {
      * 注意，暂停并不是说马上停止什么都不干，暂停指的是当前帧播放完成后，不播放下一帧了，
      * 故这里虽然返回-1了，外面还有当前帧的缓存数据，所以此刻外面还在播放，当当前帧播放完成了后才会没有数据播放，因为这里 return -1 了嘛，读取不到下一帧了
      */
-    if (is->paused && m_audio_force_play)
+    if (is->paused && m_settings.forcePlay())
         return -1;
     do {
 #if defined(_WIN32)
@@ -1303,7 +1320,7 @@ int VideoCtrl::audio_decode_frame(VideoState *is) {
     else
         is->audio_clock = NAN;
     is->audio_clock_serial = af->serial;
-    m_audio_force_play = true;//强制播放一帧事件完成
+    m_settings.setForcePlay(true); //强制播放一帧事件完成
 
     return resampled_data_size;
 }
@@ -1317,7 +1334,7 @@ int VideoCtrl::synchronize_audio(VideoState *is, int nb_samples) {
         double diff, avg_diff;
         int min_nb_samples, max_nb_samples;
         // 计算当前音频需要同步时间（媒体时间单位），然后转换为实时单位
-        diff = (get_clock(&is->audclk) - get_master_clock(is)) / m_playback_rate;
+        diff = (get_clock(&is->audclk) - get_master_clock(is)) / m_settings.rate();
         // 只有在适当的时间差下，才进行同步，差太多就默认为没问题，是故意这样的，就不需要进行同步
         if (!std::isnan(diff) && fabs(diff) < AV_NOSYNC_THRESHOLD) {
             /*
@@ -1592,6 +1609,10 @@ void VideoCtrl::do_exit(VideoState *is) {
 
     // 这里不销毁窗口，因为窗口我们需要一直渲染
     m_video_open = false; // 标记视频窗口已关闭--其实是播放状态的关闭，窗口实际还在使用
+    // 切换文件时旧会话的结束事件属于过期事件，不投递给播放服务
+    if (!isCurrentSession(is)) {
+        return;
+    }
     if (m_user_stop) {
         emit SigUserStopFinished();
     } else {
@@ -1944,7 +1965,7 @@ void VideoCtrl::video_refresh(void *arg, double *remainingTime) {
 
     //    todo:步长的时候会导致 get_master_clock = NAN 会存在问题吧
     double clock = get_master_clock(is);
-    if (!std::isnan(clock) && clock >= 0) {
+    if (!std::isnan(clock) && clock >= 0 && isCurrentSession(is)) {
         double media_time = clock;
         emit SigVideoPlaySeconds((int)media_time);
     }
@@ -1961,7 +1982,7 @@ double VideoCtrl::compute_target_delay(double delay, VideoState *is) {
          * 比如 2x 倍速下，diff=0.05s 媒体时间 = 0.025s 实时时间。
          * 不转换的话会过度补偿同步，导致画面卡顿。
          */
-        double diff_real = diff / m_playback_rate;
+        double diff_real = diff / m_settings.rate();
         /*
          * mark：正常来说调整阈值不能超过 0.1s，不然肉眼能感受得出来了，我们这里的追赶是为了用户无法感知的情况下，实现音视频同步的调整。
          */
@@ -1996,9 +2017,9 @@ double VideoCtrl::vp_duration(VideoState *is, Frame *vp, Frame *nextVp) {
             /*
              * mark：视频的倍数功能就是这么简单，就是这一行代码就实现了，比如正常播放40ms，开启两倍速，那么就是外面 sleep 换成 20ms即可
              */
-            return vp->duration / m_playback_rate;
+            return vp->duration / m_settings.rate();
         } else {
-            return duration / m_playback_rate;
+            return duration / m_settings.rate();
         }
     } else {
         return 0.0;
@@ -2095,7 +2116,9 @@ void VideoCtrl::video_image_display(VideoState *is) {
             m_frame_width = vp->frame->width;
             m_frame_height = vp->frame->height;
             qDebug() << "VideoCtrl::video_image_display - emitting SigFrameDimensionsChanged" << m_frame_width << m_frame_height;
-            emit SigFrameDimensionsChanged(m_frame_width, m_frame_height);
+            if (isCurrentSession(is)) {
+                emit SigFrameDimensionsChanged(m_frame_width, m_frame_height);
+            }
         }
     }
     /*mark：无论你图片有多大，我 rect 设置了多大，最后图片显示就是多大，即最后 SDL_RenderCopyEx 会帮我们做等比例缩放处理 */
@@ -2183,15 +2206,15 @@ int VideoCtrl::stream_has_enough_packets(AVStream *st, int stream_id, PacketQueu
 }
 
 bool VideoCtrl::get_playback_change() {
-    return m_playback_changed;
+    return m_settings.rateChanged();
 }
 
 void VideoCtrl::set_playback_change(bool change) {
-    m_playback_changed = change;
+    m_settings.setRateChanged(change);
 }
 
 float VideoCtrl::get_playback_rate() {
-    return m_playback_rate;
+    return m_settings.rate();
 }
 
 int64_t VideoCtrl::get_target_frequency() {
@@ -2210,7 +2233,7 @@ int VideoCtrl::get_target_channels() {
 
 bool VideoCtrl::is_normal_playback_rate() {
     // 在 0.99 ~ 1.01 之间，那么就是正常播放速度，因为我们用的 float，它不一定计算出来刚好就是1，后面可能会有浮点数误差，所以这里加个范围判断
-    if (m_playback_rate > 0.99 && m_playback_rate < 1.01) {
+    if (m_settings.rate() > 0.99 && m_settings.rate() < 1.01) {
         return true;
     } else {
         return false;
@@ -2255,11 +2278,11 @@ void VideoCtrl::OnUserStop()
 
 void VideoCtrl::OnPlayVolume(double percent)
 {
-    m_startup_volume = percent * SDL_MIX_MAXVOLUME;
+    m_settings.setVolumeRatio(percent);
     if(m_cur_stream == nullptr) {
         return;
     }
-    m_cur_stream->audio_volume = m_startup_volume;
+    m_cur_stream->audio_volume = m_settings.volumeFor(SDL_MIX_MAXVOLUME);
 }
 
 void VideoCtrl::OnPlaySeek(double percent)
@@ -2346,7 +2369,7 @@ void VideoCtrl::stream_toggle_pause(VideoState *is) {
     }
     is->paused = is->audclk.paused = is->vidclk.paused = !is->paused;
     // 标记需要强制播放一帧音频
-    m_audio_force_play = false;
+    m_settings.setForcePlay(false);
 }
 
 void VideoCtrl::toggle_pause(VideoState *is) {
@@ -2552,12 +2575,12 @@ void VideoCtrl::update_volume(int sign, double step) {
     {
         return;
     }
-    double volume_level = m_cur_stream->audio_volume ? (20 * log(m_cur_stream->audio_volume / (double)SDL_MIX_MAXVOLUME) / log(10)) : -1000.0;
-    int new_volume = lrint(SDL_MIX_MAXVOLUME * pow(10.0, (volume_level + sign * step) / 20.0));
-    av_log_info("volume changed, from:%d to %d\n", m_cur_stream->audio_volume, av_clip(m_cur_stream->audio_volume == new_volume ? (m_cur_stream->audio_volume + sign) : new_volume, 0, SDL_MIX_MAXVOLUME));
-    m_cur_stream->audio_volume = av_clip(m_cur_stream->audio_volume == new_volume ? (m_cur_stream->audio_volume + sign) : new_volume, 0, SDL_MIX_MAXVOLUME);
 
-    m_startup_volume = m_cur_stream->audio_volume;
+    const int previous = m_cur_stream->audio_volume;
+    m_cur_stream->audio_volume = m_settings.steppedVolume(previous, sign, step, SDL_MIX_MAXVOLUME);
+    m_settings.setVolumeFrom(m_cur_stream->audio_volume, SDL_MIX_MAXVOLUME);
+    av_log_info("volume changed, from:%d to %d\n", previous, m_cur_stream->audio_volume);
+
     emit SigVideoVolume(m_cur_stream->audio_volume * 1.0 / SDL_MIX_MAXVOLUME);
 }
 
@@ -2572,16 +2595,15 @@ void VideoCtrl::sub_volume() {
 }
 
 void VideoCtrl::update_speed(float speed) {
-    av_log_info("playback rate changed, from:%f to:%f\n", m_playback_rate, speed);
+    av_log_info("playback rate changed, from:%f to:%f\n", m_settings.rate(), speed);
     // todo：其实可以做个优化，如果当前播放速度和目标播放速度相同，那么就不用切换播放速度了，这样会省点时间
     // 先更新倍率，再更新时钟速度。set_clock_speed 内部会先 get_clock 保存当前值，再修改 speed，避免时钟跳变
-    m_playback_rate = speed;
-    m_playback_changed = true;
+    m_settings.setRate(speed);
     if (m_cur_stream) {
         set_clock_speed(&m_cur_stream->vidclk, speed);
         set_clock_speed(&m_cur_stream->audclk, speed);
     }
-    emit SigSpeed(m_playback_rate);
+    emit SigSpeed(m_settings.rate());
 }
 
 // ==================== 音频提取 ====================

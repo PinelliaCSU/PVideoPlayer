@@ -4,7 +4,7 @@
 #include<QFileInfo>
 
 MediaList::MediaList(QWidget *parent)
-    : QListWidget{parent},
+    : QListView{parent},
     _menu(this),
     _act_add_file(this),
     _act_remove_file(this),
@@ -31,7 +31,6 @@ bool MediaList::Init(){
     connect(&_act_remove_file, &QAction::triggered, this, &MediaList::removeFile);
     connect(&_act_clear_list, &QAction::triggered, this, [this]() {
         emit SigClearList();
-        clear();
     });
     return true;
 
@@ -77,10 +76,9 @@ void MediaList::addFile()
 
 void MediaList::removeFile()
 {
-    const int row = currentRow();
-    if (row < 0) {
+    const QModelIndex index = currentIndex();
+    if (!index.isValid()) {
         return;
     }
-    emit SigRemoveFile(row);
-    takeItem(row);
+    emit SigRemoveFile(index.row());
 }

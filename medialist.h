@@ -1,12 +1,12 @@
 #ifndef MEDIALIST_H
 #define MEDIALIST_H
 
-#include <QListWidget>
+#include <QListView>
 #include <QMenu>
 #include <QAction>
 #include <QContextMenuEvent>
 
-class MediaList : public QListWidget
+class MediaList : public QListView
 {
     Q_OBJECT
 public:

@@ -10,7 +10,7 @@
 #include<QTimer>
 #include<QEvent>
 
-class PlaybackService;
+class IPlaybackTarget;
 class QVBoxLayout;
 namespace Ui {
 class Show;
@@ -24,8 +24,10 @@ public:
     explicit Show(QWidget *parent = nullptr);
     ~Show();
     bool Init();
-    void SetPlaybackService(PlaybackService *service);
-    void OnPlay(QString strFile);
+    // 注入播放目标（应用控制器），视图不再直接依赖 PlaybackService
+    void SetPlaybackTarget(IPlaybackTarget *target);
+    // 视频容器当前的渲染目标原生窗口句柄
+    WId renderTarget() const;
     void OnFrameDimensionsChanged(int nFrameWidth, int nFrameHeight);
     void ShowToast(const QString &text);
     void ShowShortcutHint(const QString &text); // 全屏快捷键提示（居中显示）
@@ -49,7 +51,6 @@ private:
     void OnVideoContextMenuRequested(const QPoint &pos);
 
 signals:
-    void SigPlay(QString strFile);
     void SigOpenFile(QString strFile);
     void SigExitFullScreen();
     void SigTogglePlay();   //点击视频实现暂停
@@ -65,7 +66,7 @@ private:
     int _nLastFrameHeight;
 
     QString _current_file; // 当前播放的文件路径
-    PlaybackService *_playback_service = nullptr;
+    IPlaybackTarget *_playback_target = nullptr;
 
     QWidget *_pipWindow = nullptr;       // 画中画悬浮窗口（无边框、置顶）
     QVBoxLayout *_pipLayout = nullptr;   // 悬浮窗口内的视频容器布局

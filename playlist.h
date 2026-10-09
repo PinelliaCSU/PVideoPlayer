@@ -2,25 +2,21 @@
 #define PLAYLIST_H
 
 #include <QWidget>
-#include <QListWidget>
 #include <QDropEvent>
 #include <QDragEnterEvent>
 #include <QMimeData>
-#include "playlistmodel.h"
+
+class PlaylistModel;
 
 namespace Ui {
 class Playlist;
 }
 
-
-// 播放模式枚举
-enum PlayMode {
-    PLAYMODE_REPEAT_LIST = 0,   // 列表循环（默认）
-    PLAYMODE_NORMAL,            // 顺序播放
-    PLAYMODE_REPEAT_ONE,        // 循环播放
-    PLAYMODE_SHUFFLE            // 随机播放
-};
-
+/*
+ * 播放列表视图：只负责列表控件的展示与用户操作转发。
+ * 列表数据由注入的 PlaylistModel 提供；增删、校验、播放模式和持久化
+ * 由 AppController / PlaylistCoordinator 处理，本类不持有播放业务状态。
+ */
 class Playlist : public QWidget
 {
     Q_OBJECT
@@ -28,37 +24,31 @@ class Playlist : public QWidget
 public:
     explicit Playlist(QWidget *parent = nullptr);
     ~Playlist();
-    bool Init();
 
-    void SlotOnAddFile(QString filePath);
-    void SlotOnPlayVideoFile(QListWidgetItem * item); //双击播放
-    void SlotOnBackPlay();
-    void SlotOnNextPlay();
-    void OnAddFileAndPlay(QString strFileName);
-    //播放模式
-    void SetPlayMode(PlayMode mode);   //设置播放模式
-    PlayMode GetPlayMode() const;
+    bool Init();
+    // 绑定列表数据模型（模型生命周期由应用控制器管理）
+    void SetPlaylistModel(PlaylistModel *model);
+    // 同步当前选中项（由控制器在播放索引变化时调用）
+    void SetCurrentIndex(int row);
 
 protected:
-    //    鼠标拖拽放下事件
-    void dropEvent(QDropEvent *event);
-    //    鼠标拖动事件
-    void dragEnterEvent(QDragEnterEvent *event);
+    void dropEvent(QDropEvent *event) override;
+    void dragEnterEvent(QDragEnterEvent *event) override;
+
+signals:
+    // 用户要求把某个地址加入播放列表（未校验的原始输入）
+    void SigAddRequested(const QString &locator);
+    // 用户要求播放某一行
+    void SigPlayIndexRequested(int row);
+    void SigRemoveRequested(int row);
+    void SigClearRequested();
+
 private:
     bool initUi();
     void connectSignalSlots();
-    bool addMediaItem(const QString &locator, bool showDuplicateMessage);
-    void rebuildView();
 
-    void playByIndex(int index);//播放指定索引
-signals:
-    void SigPlay(QString filePath);
-private:
     Ui::Playlist *ui;
-    int _current_media_index;
-    PlaylistModel _model;
-
-    PlayMode _play_mode;//当前播放模式
+    PlaylistModel *_model = nullptr;
 };
 
 #endif // PLAYLIST_H

@@ -2,20 +2,14 @@
 #define MAINWINDOW_H
 
 #include <QMainWindow>
-#include <QListWidget>
 #include <QMouseEvent>
 #include <QPoint>
 #include <QMenu>
-#include <QTimer>
-
 
 #include "playlist.h"
 #include "title.h"
 
-class PlaybackService;
-class PlaybackSessionManager;
-class PlaybackEventSource;
-class IPlaybackBackend;
+class AppController;
 
 QT_BEGIN_NAMESPACE
 namespace Ui {
@@ -23,75 +17,53 @@ class MainWindow;
 }
 QT_END_NAMESPACE
 
+/*
+ * 主窗口：只负责窗口级行为和 UI 编排。
+ * 播放业务（播放列表、历史、续播、控制栏策略）全部由 AppController 承担，
+ * 本类只把界面信号接到控制器，并把控制器信号接到界面显示。
+ */
 class MainWindow : public QMainWindow
 {
     Q_OBJECT
 
 public:
-    MainWindow(PlaybackEventSource *events, IPlaybackBackend *backend, QWidget *parent = nullptr);
-    ~MainWindow();
+    explicit MainWindow(AppController *controller, QWidget *parent = nullptr);
+    ~MainWindow() override;
     bool Init();
+
 protected:
     //    解决窗口无法拖动
-    void mousePressEvent(QMouseEvent *event);
-    void mouseReleaseEvent(QMouseEvent *event);
-    void mouseMoveEvent(QMouseEvent *event);
-    //    键盘事件已通过全局QAction处理
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+
 private:
-    void connectSignalSlots();
+    void connectUiSignals();
+    void connectControllerSignals();
+    void registerShortcuts();
 
     void SlotOnMinBtnClicked();
     void SlotOnMaxBtnClicked();
     void SlotOnFullScreenBtnClicked();
     void SlotOnCloseBtnClicked();
     void SlotOnMenuBtnClicked();
-
     void SlotOnPlayListCtrlBtnClicked();
 
     //    初始化菜单，并添加 action 的槽函数
     void initMenu();
-    //设置菜单切换播放模式与窗口置顶
-    void SlotOnPlayModeChanged(int mode);
     void SlotOnAlwaysOnTopToggled(bool on);
-    //获取音频按钮
     void SlotOnExtractAudio();
-
-    void SlotOnBeforeNewPlay(QString filename);
-    void SlotOnSavePlaybackPosition();             // 停止时保存播放位置
-    void SlotOnCachePlaySeconds(int seconds);       // 缓存当前播放时间
-    void SlotOnCacheTotalSeconds(int seconds);      // 缓存总时长
-    void SlotOnCheckResume(int totalSeconds); // 开始播放后检查续播
-    void UpdatePlayHistory(const QString& filePath); // 更新播放历史
-     void SlotOnClearPlayHistory(); //清除全部播放记录
-
     void ShowControlBar();
-    void RestartControlBarHideTimer();
-signals:
-    void SigSeekForward();
-    void SigSeekBack();
-    void SigAddVolume();
-    void SigSubVolume();
-    void SigPlayOrPause();
-    void SigStep(); // 逐帧播放
+    void OnResumeAvailable(const QString &locator, int positionSeconds, int totalSeconds);
+
 private:
     Ui::MainWindow *ui;
-public:
+    AppController *_controller;
     Playlist _playlist;
     Title _title;
-private:
+    QMenu _menu;
     bool _move_drag;
     QPoint _drag_position;
-    QMenu _menu;
-    PlaybackService *_playback_service;
-    PlaybackSessionManager *_session_manager;
-
-    QString _playing_file_path;      // 当前正在跟踪播放位置的文件路径
-    int  _cached_total_seconds = 0;   // 当前视频总时长
-    int  _cached_play_seconds  = 0;   // 当前播放位置（实时缓存）
-    bool _resume_checked = false;     // 是否已经检查过续播（防止重复弹窗）
-    QTimer _control_bar_hide_timer;
-    bool _is_playing = false;
-
-
 };
+
 #endif // MAINWINDOW_H

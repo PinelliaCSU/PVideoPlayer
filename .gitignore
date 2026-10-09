@@ -1,5 +1,6 @@
 # Qt/qmake generated build directories and files
 build/
+build-tests/
 *.pro.user
 *.pro.user.*
 *.qmake.stash
@@ -52,3 +53,5 @@ Desktop.ini
 *.swp
 *.swo
 *~
+
+*.md

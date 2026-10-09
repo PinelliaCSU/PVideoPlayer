@@ -52,6 +52,19 @@ public:
     virtual void OnSetRenderTarget(WId playWidgetId) = 0;
 };
 
+/*
+ * 播放目标接口：视图（Show 等）通过它发起播放和切换渲染窗口，
+ * 从而不依赖 PlaybackService 的具体实现。
+ */
+class IPlaybackTarget
+{
+public:
+    virtual ~IPlaybackTarget() = default;
+
+    virtual void startPlayback(const QString &locator, WId renderTarget) = 0;
+    virtual void setRenderTarget(WId renderTarget) = 0;
+};
+
 // 默认播放后端（真实实现由 VideoCtrl 提供）。
 // 通过工厂函数创建后端，使组合根（main）无需包含 FFmpeg/SDL 等具体后端头文件。
 struct PlaybackBackendBundle

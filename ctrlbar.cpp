@@ -5,7 +5,7 @@
 #include <QMouseEvent>
 #include "guiutils.h"
 #include "configutils.h"
-#include "playlist.h"
+#include "media_types.h"
 
 CtrlBar::CtrlBar(QWidget *parent) :
     QWidget(parent),
