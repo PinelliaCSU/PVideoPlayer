@@ -73,6 +73,6 @@ struct PlaybackBackendBundle
     IPlaybackBackend *backend = nullptr;
 };
 
-PlaybackBackendBundle CreateDefaultPlaybackBackend();
+PlaybackBackendBundle CreateDefaultPlaybackBackend(QObject *parent = nullptr);
 
 #endif // PLAYBACKBACKEND_H

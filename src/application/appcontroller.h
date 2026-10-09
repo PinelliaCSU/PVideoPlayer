@@ -11,7 +11,7 @@
 #include "playlistcoordinator.h"
 
 class PlaybackService;
-class PlaybackSessionManager;
+class PlaybackSession;
 class PlaybackCoordinator;
 class PlaylistModel;
 class IPlaylistRepository;
@@ -33,6 +33,8 @@ class AppController final : public QObject, public IPlaybackTarget
     Q_OBJECT
 
 public:
+    AppController(PlaybackSession *session,
+                  IPlaylistRepository *repository, QObject *parent = nullptr);
     AppController(PlaybackEventSource *events, IPlaybackBackend *backend,
                   IPlaylistRepository *repository, QObject *parent = nullptr);
     ~AppController() override;
@@ -129,7 +131,7 @@ private:
     QStringList locators() const;
     void persistPlaylist();
 
-    PlaybackSessionManager *m_sessionManager = nullptr;
+    PlaybackSession *m_session = nullptr;
     PlaybackService *m_service = nullptr;
     PlaybackCoordinator *m_playbackCoordinator = nullptr;
     PlaylistModel *m_playlistModel = nullptr;

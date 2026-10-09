@@ -21,6 +21,8 @@ SOURCES += \
     src/media/videoctrl.cpp \
     src/playback/playbackcoordinator.cpp \
     src/playback/playbackservice.cpp \
+    src/playback/playbacksession.cpp \
+    src/playback/playbacksession_default.cpp \
     src/playback/playbacksessionmanager.cpp \
     src/playback/playbacksettings.cpp \
     src/playlist/medialist.cpp \
@@ -53,6 +55,7 @@ HEADERS += \
     src/media/videoctrl.h \
     src/playback/playbackcoordinator.h \
     src/playback/playbackservice.h \
+    src/playback/playbacksession.h \
     src/playback/playbacksessionmanager.h \
     src/playback/playbacksettings.h \
     src/playlist/medialist.h \

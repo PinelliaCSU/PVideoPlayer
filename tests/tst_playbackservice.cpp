@@ -5,6 +5,7 @@
 #include <QThread>
 
 #include "../src/playback/playbackservice.h"
+#include "../src/playback/playbacksession.h"
 #include "../src/playback/playbacksessionmanager.h"
 #include "fakeplaybackbackend.h"
 
@@ -112,6 +113,21 @@ void PlaybackServiceTest::commandsFromAnotherThreadAreSerialized()
     QTRY_COMPARE_WITH_TIMEOUT(service.state().status, PlaybackStatus::Finished, 1000);
 
     callerThread.wait();
+}
+
+void PlaybackServiceTest::instantiatedSessionOwnsPlaybackService()
+{
+    FakePlaybackBackend backend;
+    PlaybackSession session(&backend, &backend);
+
+    QVERIFY(session.isValid());
+    QVERIFY(session.service() != nullptr);
+
+    QSignalSpy started(session.service(), &PlaybackService::started);
+    session.service()->start(QStringLiteral("session.mp4"), WId{});
+
+    QTRY_COMPARE_WITH_TIMEOUT(started.count(), 1, 2000);
+    QCOMPARE(started.last().at(0).toString(), QStringLiteral("session.mp4"));
 }
 
 void PlaybackServiceTest::sessionsAreIndependent()

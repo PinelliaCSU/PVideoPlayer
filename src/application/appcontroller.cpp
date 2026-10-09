@@ -6,7 +6,7 @@
 #include "medialocator.h"
 #include "playbackcoordinator.h"
 #include "playbackservice.h"
-#include "playbacksessionmanager.h"
+#include "playbacksession.h"
 #include "playlistmodel.h"
 #include "playlistrepository.h"
 
@@ -17,19 +17,17 @@ constexpr int kControlBarHideDelayMs = 3000;
 constexpr int kSeekAfterStartDelayMs = 500;
 }
 
-AppController::AppController(PlaybackEventSource *events, IPlaybackBackend *backend,
+AppController::AppController(PlaybackSession *session,
                              IPlaylistRepository *repository, QObject *parent)
     : QObject(parent)
-    , m_sessionManager(new PlaybackSessionManager(this))
     , m_playlistModel(new PlaylistModel(this))
     , m_playlistCoordinator(new PlaylistCoordinator(m_playlistModel, this))
+    , m_session(session)
     , m_repository(repository)
 {
-    Q_ASSERT(events != nullptr);
-    Q_ASSERT(backend != nullptr);
-
-    const int sessionId = m_sessionManager->createSession(events, backend);
-    m_service = m_sessionManager->session(sessionId);
+    Q_ASSERT(m_session != nullptr);
+    Q_ASSERT(m_session->isValid());
+    m_service = m_session->service();
     m_playbackCoordinator = new PlaybackCoordinator(m_service, this);
 
     m_controlBarTimer.setSingleShot(true);
@@ -42,6 +40,13 @@ AppController::AppController(PlaybackEventSource *events, IPlaybackBackend *back
             this, &AppController::currentIndexChanged);
 
     wirePlaybackSignals();
+}
+
+AppController::AppController(PlaybackEventSource *events, IPlaybackBackend *backend,
+                             IPlaylistRepository *repository, QObject *parent)
+    : AppController(new PlaybackSession(events, backend), repository, parent)
+{
+    m_session->setParent(this);
 }
 
 AppController::~AppController() = default;

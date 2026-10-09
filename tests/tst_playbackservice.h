@@ -13,6 +13,7 @@ private slots:
     void backendErrorIsPublishedAsStateAndSignal();
     void stateChangedTracksBackendEvents();
     void commandsFromAnotherThreadAreSerialized();
+    void instantiatedSessionOwnsPlaybackService();
     void sessionsAreIndependent();
     void sessionCommandsRunOnCommandThread();
     void audioExtractionIsAsynchronous();

@@ -294,10 +294,10 @@ bool VideoCtrl::isCurrentSession(const VideoState *is) const
     return is != nullptr && m_session.matches(is->session_epoch);
 }
 
-PlaybackBackendBundle CreateDefaultPlaybackBackend()
+PlaybackBackendBundle CreateDefaultPlaybackBackend(QObject *parent)
 {
-    // 组合根调用：后端由 QApplication 持有，随应用退出统一销毁
-    VideoCtrl *controller = VideoCtrl::create(QCoreApplication::instance());
+    // 播放会话持有后端，后端生命周期与会话一致
+    VideoCtrl *controller = VideoCtrl::create(parent ? parent : QCoreApplication::instance());
 
     PlaybackBackendBundle bundle;
     bundle.events = controller;
