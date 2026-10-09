@@ -55,8 +55,12 @@ bool MainWindow::Init()
     ui->show->SetPlaybackTarget(_controller);
     // 播放列表视图绑定应用控制器持有的数据模型
     _playlist.SetPlaylistModel(_controller->playlistModel());
-    // 记录初始渲染目标（Show 内部会在画中画切换时更新）
-    _controller->setRenderTarget(ui->show->renderTarget());
+    /*
+     * 渲染目标延迟提供：只有真正开始播放时才向 Show 查询原生窗口句柄。
+     * 启动阶段提前调用 winId() 会把视频容器变成原生窗口，此时还没有任何渲染，
+     * 窗口内容未绘制会直接透出桌面背景（视频区域显示为空白）。
+     */
+    _controller->setRenderTargetProvider([this]() { return ui->show->renderTarget(); });
 
     initMenu();
     connectUiSignals();

@@ -21,6 +21,7 @@ private slots:
     void extractAudioNotifiesStartAndFinish();
     void userInteractionRequestsControlBar();
     void playbackStateDrivesControlBarPolicy();
+    void controlBarHidesWhilePlayingDespiteProgressUpdates();
 
 private:
     QString createTempMedia(const QString &name) const;

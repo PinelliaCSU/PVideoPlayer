@@ -4,6 +4,8 @@
 #include <QObject>
 #include <QTimer>
 
+#include <functional>
+
 #include "media_types.h"
 #include "playbackbackend.h"
 #include "playlistcoordinator.h"
@@ -75,8 +77,19 @@ public:
     void startPlayback(const QString &locator, WId renderTarget) override;
     void setRenderTarget(WId renderTarget) override;
 
+    /*
+     * 渲染目标提供者：视图在真正开始播放时才需要原生窗口句柄。
+     * 使用延迟查询而不是启动时提前查询，避免视频容器在还没开始渲染时
+     * 就变成原生窗口而出现未绘制的空白区域。
+     */
+    using RenderTargetProvider = std::function<WId()>;
+    void setRenderTargetProvider(RenderTargetProvider provider);
+
     // 用户交互：显示控制栏并重新开始自动隐藏计时
     void notifyUserInteraction();
+
+    // 控制栏自动隐藏延时（毫秒），供设置项与测试使用
+    void setControlBarHideDelay(int milliseconds);
 
 signals:
     void started(const QString &locator);
@@ -107,7 +120,10 @@ signals:
 private:
     void wirePlaybackSignals();
     void onPlaybackStateChanged();
+    void updateControlBarPolicy();
     void restartControlBarTimer();
+    // 解析当前渲染目标：优先向视图延迟查询
+    WId resolveRenderTarget();
     bool appendLocator(const QString &rawLocator, bool requireSupportedFormat, bool notify);
     int rowForLocator(const QString &rawLocator, bool requireSupportedFormat, bool notify);
     QStringList locators() const;
@@ -121,6 +137,9 @@ private:
     IPlaylistRepository *m_repository = nullptr;
 
     WId m_renderTarget = 0;
+    RenderTargetProvider m_renderTargetProvider;
+    // 当前是否处于“应自动隐藏控制栏”的会话状态
+    bool m_autoHideControlBar = false;
     QTimer m_controlBarTimer;
 };
 

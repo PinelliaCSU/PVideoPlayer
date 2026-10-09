@@ -104,14 +104,37 @@ bool AppController::isPlaying() const
 
 void AppController::onPlaybackStateChanged()
 {
-    // 播放中保持自动隐藏计时，暂停或停止时保持控制栏可见
-    restartControlBarTimer();
+    updateControlBarPolicy();
+}
+
+void AppController::updateControlBarPolicy()
+{
+    /*
+     * 播放状态会被高频刷新（每次播放进度上报都会发布 stateChanged），
+     * 因此这里只在“是否应自动隐藏”发生翻转时才操作计时器，
+     * 否则进度刷新会不断推迟隐藏时间，控制栏就永远不会自动隐藏。
+     */
+    const PlaybackStatus status = state().status;
+    const bool shouldAutoHide = status == PlaybackStatus::Opening
+        || status == PlaybackStatus::Playing
+        || status == PlaybackStatus::Seeking;
+
+    if (shouldAutoHide == m_autoHideControlBar) {
+        return;
+    }
+
+    m_autoHideControlBar = shouldAutoHide;
+    if (shouldAutoHide) {
+        m_controlBarTimer.start();
+    } else {
+        m_controlBarTimer.stop();
+    }
 }
 
 void AppController::restartControlBarTimer()
 {
     m_controlBarTimer.stop();
-    if (isPlaying()) {
+    if (m_autoHideControlBar) {
         m_controlBarTimer.start();
     }
 }
@@ -120,6 +143,11 @@ void AppController::notifyUserInteraction()
 {
     emit showControlBarRequested();
     restartControlBarTimer();
+}
+
+void AppController::setControlBarHideDelay(int milliseconds)
+{
+    m_controlBarTimer.setInterval(milliseconds > 0 ? milliseconds : 1);
 }
 
 // ===== 播放列表 =====
@@ -242,7 +270,23 @@ void AppController::startPlayback(const QString &locator, WId renderTarget)
     if (renderTarget != 0) {
         m_renderTarget = renderTarget;
     }
-    m_service->start(locator, m_renderTarget);
+    m_service->start(locator, resolveRenderTarget());
+}
+
+void AppController::setRenderTargetProvider(RenderTargetProvider provider)
+{
+    m_renderTargetProvider = std::move(provider);
+}
+
+WId AppController::resolveRenderTarget()
+{
+    if (m_renderTargetProvider) {
+        const WId provided = m_renderTargetProvider();
+        if (provided != 0) {
+            m_renderTarget = provided;
+        }
+    }
+    return m_renderTarget;
 }
 
 void AppController::setRenderTarget(WId renderTarget)

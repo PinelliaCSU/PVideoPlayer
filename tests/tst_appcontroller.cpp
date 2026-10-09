@@ -234,3 +234,46 @@ void AppControllerTest::playbackStateDrivesControlBarPolicy()
     QTRY_VERIFY_WITH_TIMEOUT(!controller.isPlaying(), 2000);
     QCOMPARE(controller.state().status, PlaybackStatus::Paused);
 }
+
+void AppControllerTest::controlBarHidesWhilePlayingDespiteProgressUpdates()
+{
+    FakePlaylistRepository repository;
+    FakePlaybackBackend backend;
+    AppController controller(&backend, &backend, &repository);
+    QVERIFY(controller.init());
+    controller.setControlBarHideDelay(80);
+
+    const QString media = createTempMedia("autohide.mp4");
+    QVERIFY(!media.isEmpty());
+
+    QSignalSpy showSpy(&controller, &AppController::showControlBarRequested);
+    QSignalSpy hideSpy(&controller, &AppController::hideControlBarRequested);
+
+    controller.addLocatorAndPlay(media);
+    QTRY_COMPARE_WITH_TIMEOUT(controller.state().status, PlaybackStatus::Opening, 2000);
+
+    /*
+     * 播放中的进度上报会持续发布 stateChanged。
+     * 自动隐藏必须在进度持续刷新期间仍然生效：如果每次状态刷新都重置计时，
+     * 控制栏就永远不会隐藏。
+     */
+    bool hiddenWhileUpdating = false;
+    for (int i = 0; i < 20 && !hiddenWhileUpdating; ++i) {
+        emit backend.SigVideoPlaySeconds(i);
+        QTest::qWait(30);
+        hiddenWhileUpdating = hideSpy.count() > 0;
+    }
+    QVERIFY(hiddenWhileUpdating);
+
+    // 用户交互后重新显示，并再次自动隐藏
+    controller.notifyUserInteraction();
+    QVERIFY(showSpy.count() >= 1);
+    QTRY_COMPARE_WITH_TIMEOUT(hideSpy.count(), 2, 2000);
+
+    // 暂停后控制栏保持可见
+    emit backend.SigPauseStat(true);
+    QTRY_VERIFY_WITH_TIMEOUT(!controller.isPlaying(), 2000);
+    const int hidesWhilePaused = hideSpy.count();
+    QTest::qWait(250);
+    QCOMPARE(hideSpy.count(), hidesWhilePaused);
+}
