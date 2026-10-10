@@ -59,6 +59,34 @@ struct PlayHistoryEntry
     QDateTime lastPlayed;
 };
 
+/*
+ * 媒体信息快照：播放后端在打开媒体时采集的静态信息，以及播放过程中刷新的缓冲统计。
+ * 界面只读取该结构，不直接接触 FFmpeg。
+ */
+struct MediaInfo
+{
+    bool valid = false;
+    QString fileName;              // 文件名（网络流时为完整地址）
+    QString filePath;              // 完整路径或流地址
+    int width = 0;                 // 视频宽度（像素）
+    int height = 0;                // 视频高度（像素）
+    double frameRate = 0.0;        // 帧率（fps）
+    QString videoCodec;            // 视频编码格式
+    QString audioCodec;            // 音频编码格式
+    qint64 bitRate = 0;            // 比特率（bit/s）
+    int audioSampleRate = 0;       // 音频采样率（Hz）
+    int audioChannels = 0;         // 声道数
+    QString decodeMethod;          // 当前解码方式
+    QString hardwareAcceleration;  // 硬件加速状态
+
+    // 播放过程中实时刷新的缓冲统计
+    int videoBufferFrames = 0;     // 待显示的视频帧数
+    int videoBufferPackets = 0;    // 待解码的视频包数
+    int audioBufferFrames = 0;     // 待播放的音频帧数
+    int audioBufferPackets = 0;    // 待解码的音频包数
+    int droppedFrames = 0;         // 累计丢帧数
+};
+
 enum class PlaybackStatus
 {
     Idle,

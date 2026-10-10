@@ -53,6 +53,7 @@ private:
     void initMenu();
     void SlotOnAlwaysOnTopToggled(bool on);
     void SlotOnExtractAudio();
+    void SlotOnShowMediaInfo();
     void ShowControlBar();
     void OnResumeAvailable(const QString &locator, int positionSeconds, int totalSeconds);
 

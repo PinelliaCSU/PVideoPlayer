@@ -3,6 +3,8 @@
 #include <QtTest>
 
 #include "tst_appcontroller.h"
+#include "tst_mediainfodialog.h"
+#include "tst_mediainfoservice.h"
 #include "tst_medialocator.h"
 #include "tst_playbackservice.h"
 #include "tst_playbacksettings.h"
@@ -72,6 +74,8 @@ int main(int argc, char *argv[])
 
     int status = 0;
     PVP_RUN_SUITE(MediaLocatorTest);
+    PVP_RUN_SUITE(MediaInfoServiceTest);
+    PVP_RUN_SUITE(MediaInfoDialogTest);
     PVP_RUN_SUITE(SubtitlePluginTest);
     PVP_RUN_SUITE(PlaybackServiceTest);
     PVP_RUN_SUITE(PlaybackSettingsTest);

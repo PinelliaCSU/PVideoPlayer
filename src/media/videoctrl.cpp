@@ -7,6 +7,7 @@
 #include<QFile>
 #include<iostream>
 #include<QFileInfo>
+#include <QStringList>
 #include <cmath>
 #include <QMutex>
 #if defined(_WIN32)
@@ -105,6 +106,14 @@ static enum AVPixelFormat pick_hardware_pixel_format(AVCodecContext *ctx, const 
         }
     }
     return pixFmts[0];
+}
+
+// 硬件解码设备名（如 D3D11VA），用于播放信息面板展示硬件加速状态
+static QString hardwareDeviceName(const HardwareDecoderDevice &device)
+{
+    const AVHWDeviceType type = device.deviceType();
+    const char *name = type == AV_HWDEVICE_TYPE_NONE ? nullptr : av_hwdevice_get_type_name(type);
+    return name ? QString::fromLatin1(name).toUpper() : QString();
 }
 
 /*
@@ -241,6 +250,17 @@ void VideoCtrl::start_play(QString filename, WId play_wid) {
     m_session.begin();
 
     m_play_loop = false;
+
+    // 新会话开始，旧的媒体信息立即失效，避免面板显示上一个文件的数据
+    {
+        QMutexLocker locker(&m_media_info_mutex);
+        m_media_info = MediaInfo{};
+    }
+    m_video_buffer_frames = 0;
+    m_video_buffer_packets = 0;
+    m_audio_buffer_frames = 0;
+    m_audio_buffer_packets = 0;
+    m_dropped_frames = 0;
 
     // 停止空闲事件循环（如果正在运行）
     m_idle_loop = false;
@@ -527,6 +547,9 @@ void VideoCtrl::read_thread(VideoState *is) {
         ret = -1;
         goto fail;
     }
+
+    // 流已打开，采集静态媒体信息供播放信息面板展示
+    updateMediaInfo(is);
 
     // 如果是实时流，那么无限缓冲
     if (infiniteBuffer < 0 && is->realtime)
@@ -1818,6 +1841,11 @@ void VideoCtrl::refresh_loop_wait_event(VideoState *is, SDL_Event *event) {
             av_usleep((int64_t)(remainingTime * 1000000.0));
         remainingTime = REFRESH_RATE;
         /*
+         * 播放信息面板需要的缓冲统计：暂停时也要刷新，
+         * 否则面板会一直停留在暂停前的数值。
+         */
+        refreshMediaInfoBuffers(is);
+        /*
          * mark: 这个 if (!is->paused || is->force_refresh)  其实是一个优化，即暂停状态下不需要刷新图片，那么不需要进入 video_refresh 方法，不用浪费 CPU 资源
          * 举例：
          * 1. 正常播放下，!is->paused 为 true，那么进入 video_refresh 方法，进行图片刷新。
@@ -2744,4 +2772,98 @@ void VideoCtrl::redrawLastFrame()
         m_video_output_resources.endFrame();
         g_show_rect_mutex.unlock();
     }
+}
+
+void VideoCtrl::updateMediaInfo(VideoState *is)
+{
+    if (is == nullptr || is->ic == nullptr) {
+        return;
+    }
+
+    MediaInfo info;
+    info.valid = true;
+    info.filePath = QString::fromStdString(is->filename);
+    info.fileName = QFileInfo(info.filePath).fileName();
+    if (info.fileName.isEmpty()) {
+        // 网络流地址没有文件名，直接用地址本身作为显示名
+        info.fileName = info.filePath;
+    }
+    info.bitRate = is->ic->bit_rate;
+
+    if (is->video_st) {
+        const AVCodecContext *video_context = is->viddec.avctx;
+        info.width = video_context ? video_context->width : is->video_st->codecpar->width;
+        info.height = video_context ? video_context->height : is->video_st->codecpar->height;
+        info.videoCodec = QString::fromLatin1(avcodec_get_name(is->video_st->codecpar->codec_id));
+        const AVRational frame_rate = av_guess_frame_rate(is->ic, is->video_st, nullptr);
+        if (frame_rate.num > 0 && frame_rate.den > 0) {
+            info.frameRate = av_q2d(frame_rate);
+        }
+        if (info.bitRate <= 0) {
+            info.bitRate = is->video_st->codecpar->bit_rate;
+        }
+    }
+
+    if (is->audio_st) {
+        const AVCodecContext *audio_context = is->auddec.avctx;
+        info.audioSampleRate = audio_context ? audio_context->sample_rate
+                                             : is->audio_st->codecpar->sample_rate;
+        info.audioChannels = audio_context ? audio_context->channels
+                                           : is->audio_st->codecpar->channels;
+        info.audioCodec = QString::fromLatin1(avcodec_get_name(is->audio_st->codecpar->codec_id));
+        if (info.bitRate <= 0) {
+            info.bitRate = is->audio_st->codecpar->bit_rate;
+        }
+    }
+
+    // 解码方式：视频优先报告实际启用的硬件解码器，音频固定走软件解码
+    const bool hardware_active = is->video_st != nullptr && is->hw_device.isActive();
+    const QString hardware_name = hardware_active ? hardwareDeviceName(is->hw_device) : QString();
+    QStringList decode_methods;
+    if (is->video_st) {
+        decode_methods << (hardware_active ? tr("视频 硬件解码（%1）").arg(hardware_name)
+                                           : tr("视频 软件解码"));
+    }
+    if (is->audio_st) {
+        decode_methods << tr("音频 软件解码");
+    }
+    info.decodeMethod = decode_methods.join(QStringLiteral(" / "));
+
+    if (is->video_st == nullptr) {
+        info.hardwareAcceleration = tr("不适用（无视频流）");
+    } else if (hardware_active) {
+        info.hardwareAcceleration = tr("已启用（%1）").arg(hardware_name);
+    } else {
+        info.hardwareAcceleration = tr("未启用（使用软件解码）");
+    }
+
+    QMutexLocker locker(&m_media_info_mutex);
+    m_media_info = info;
+}
+
+void VideoCtrl::refreshMediaInfoBuffers(VideoState *is)
+{
+    if (is == nullptr) {
+        return;
+    }
+    m_video_buffer_frames = frame_queue_nb_remaining(&is->pictq);
+    m_video_buffer_packets = is->videoq.nb_packets;
+    m_audio_buffer_frames = frame_queue_nb_remaining(&is->sampq);
+    m_audio_buffer_packets = is->audioq.nb_packets;
+    m_dropped_frames = is->frame_drops_early + is->frame_drops_late;
+}
+
+MediaInfo VideoCtrl::mediaInfo() const
+{
+    QMutexLocker locker(&m_media_info_mutex);
+    MediaInfo info = m_media_info;
+    if (!info.valid) {
+        return info;
+    }
+    info.videoBufferFrames = m_video_buffer_frames.load();
+    info.videoBufferPackets = m_video_buffer_packets.load();
+    info.audioBufferFrames = m_audio_buffer_frames.load();
+    info.audioBufferPackets = m_audio_buffer_packets.load();
+    info.droppedFrames = m_dropped_frames.load();
+    return info;
 }

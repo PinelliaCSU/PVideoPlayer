@@ -45,6 +45,8 @@ public:
     PlaylistModel *playlistModel() const { return m_playlistModel; }
     PlaybackState state() const;
     bool isPlaying() const;
+    // 当前媒体的信息快照，供播放信息面板展示
+    MediaInfo mediaInfo() const;
 
     // ===== 播放列表 =====
     void addLocator(const QString &rawLocator);   // 校验、去重、持久化

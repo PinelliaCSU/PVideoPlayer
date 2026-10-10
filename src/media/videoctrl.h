@@ -5,6 +5,7 @@
 #include <QWidget>
 #include<QThread>
 #include<QString>
+#include<QMutex>
 
 #include <atomic>
 
@@ -63,6 +64,9 @@ public:
 
     // 切换渲染目标原生窗口（画中画）：保持当前播放会话，在新的窗口上重建渲染资源
     void OnSetRenderTarget(WId play_wid) override;
+
+    // 媒体信息快照（线程安全）：无正在播放的媒体时返回 valid == false
+    MediaInfo mediaInfo() const override;
 signals:
     void SigStop();
 private:
@@ -122,6 +126,10 @@ private:
     void add_volume();
     void sub_volume();
     void update_speed(float speed);
+
+    // 打开媒体后采集静态媒体信息；缓冲统计在播放过程中由 refreshMediaInfoBuffers 刷新
+    void updateMediaInfo(VideoState *is);
+    void refreshMediaInfoBuffers(VideoState *is);
 private:
     bool m_init;
     bool m_play_loop;
@@ -154,6 +162,15 @@ private:
     // 渲染目标切换请求（Qt 主线程写入，SDL 线程消费）
     std::atomic<bool> m_rebind_pending{false};
     std::atomic<quintptr> m_pending_wid{0};
+
+    // 媒体信息：静态部分在打开媒体时写入，缓冲统计由播放线程持续刷新
+    mutable QMutex m_media_info_mutex;
+    MediaInfo m_media_info;
+    std::atomic<int> m_video_buffer_frames{0};
+    std::atomic<int> m_video_buffer_packets{0};
+    std::atomic<int> m_audio_buffer_frames{0};
+    std::atomic<int> m_audio_buffer_packets{0};
+    std::atomic<int> m_dropped_frames{0};
 
     // 会话代际：每次开始新播放时递增。旧会话线程在代际更新后发出的所有事件都会被丢弃，
     // 避免上一个文件播放结束时排队到达的信号覆盖新文件的播放状态。

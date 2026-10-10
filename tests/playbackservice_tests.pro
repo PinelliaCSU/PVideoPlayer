@@ -15,6 +15,8 @@ INCLUDEPATH += \
 SOURCES += \
     testmain.cpp \
     tst_appcontroller.cpp \
+    tst_mediainfodialog.cpp \
+    tst_mediainfoservice.cpp \
     tst_medialocator.cpp \
     tst_playbackservice.cpp \
     tst_playbacksettings.cpp \
@@ -23,6 +25,7 @@ SOURCES += \
     ../src/application/appcontroller.cpp \
     ../src/core/configutils.cpp \
     ../src/core/settingsrepository.cpp \
+    ../src/media/mediainfoservice.cpp \
     ../src/media/medialocator.cpp \
     ../src/playback/playbackcoordinator.cpp \
     ../src/playback/playbackservice.cpp \
@@ -33,11 +36,15 @@ SOURCES += \
     ../src/playlist/playlistmodel.cpp \
     ../src/playlist/playlistrepository.cpp \
     ../src/subtitle/subtitleparser.cpp \
-    ../src/subtitle/subtitleplugin.cpp
+    ../src/subtitle/subtitleplugin.cpp \
+    ../src/ui/guiutils.cpp \
+    ../src/ui/mediainfodialog.cpp
 
 HEADERS += \
     fakeplaybackbackend.h \
     tst_appcontroller.h \
+    tst_mediainfodialog.h \
+    tst_mediainfoservice.h \
     tst_medialocator.h \
     tst_playbackservice.h \
     tst_playbacksettings.h \
@@ -48,6 +55,7 @@ HEADERS += \
     ../src/core/media_types.h \
     ../src/core/playbackbackend.h \
     ../src/core/settingsrepository.h \
+    ../src/media/mediainfoservice.h \
     ../src/media/medialocator.h \
     ../src/playback/playbackcoordinator.h \
     ../src/playback/playbackservice.h \
@@ -58,4 +66,5 @@ HEADERS += \
     ../src/playlist/playlistmodel.h \
     ../src/playlist/playlistrepository.h \
     ../src/subtitle/subtitleparser.h \
-    ../src/subtitle/subtitleplugin.h
+    ../src/subtitle/subtitleplugin.h \
+    ../src/ui/mediainfodialog.h

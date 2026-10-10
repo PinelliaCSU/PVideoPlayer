@@ -17,6 +17,7 @@ SOURCES += \
     src/media/audioextractionservice.cpp \
     src/media/mediacomponents.cpp \
     src/media/medialocator.cpp \
+    src/media/mediainfoservice.cpp \
     src/media/sonic.cpp \
     src/media/videoctrl.cpp \
     src/playback/playbackcoordinator.cpp \
@@ -36,6 +37,7 @@ SOURCES += \
     src/ui/customslider.cpp \
     src/ui/guiutils.cpp \
     src/ui/mainwindow.cpp \
+    src/ui/mediainfodialog.cpp \
     src/ui/show.cpp \
     src/ui/title.cpp
 
@@ -51,6 +53,7 @@ HEADERS += \
     src/media/audioextractionservice.h \
     src/media/mediacomponents.h \
     src/media/medialocator.h \
+    src/media/mediainfoservice.h \
     src/media/sonic.h \
     src/media/videoctrl.h \
     src/playback/playbackcoordinator.h \
@@ -69,6 +72,7 @@ HEADERS += \
     src/ui/customslider.h \
     src/ui/guiutils.h \
     src/ui/mainwindow.h \
+    src/ui/mediainfodialog.h \
     src/ui/show.h \
     src/ui/title.h
 

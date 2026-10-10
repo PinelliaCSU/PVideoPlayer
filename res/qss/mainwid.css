@@ -74,3 +74,34 @@ QWidget#CtrlBarAndShowWidget{
     border: 1px solid black;
     border-top:none;
 }
+
+/**********消息弹窗（断点续播、提示、关于等）**********/
+/*与整体播放器保持一致的深色风格*/
+QMessageBox {
+    background-color: #202129;
+}
+
+QMessageBox QLabel {
+    color: white;
+    font-size: 13px;
+    background: transparent;
+}
+
+QMessageBox QPushButton {
+    background-color: #2e2f37;
+    color: white;
+    border: 1px solid #4A708B;
+    border-radius: 4px;
+    padding: 4px 20px;
+    min-width: 64px;
+}
+
+QMessageBox QPushButton:hover {
+    color: Cyan;
+    border-color: Cyan;
+}
+
+QMessageBox QPushButton:pressed {
+    color: CadetBlue;
+    border-color: CadetBlue;
+}

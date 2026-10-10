@@ -80,6 +80,12 @@ public:
         ++renderTargetCount;
     }
 
+    MediaInfo mediaInfo() const override
+    {
+        return info;
+    }
+
+    MediaInfo info;
     QString lastLocator;
     float lastSpeed = 1.0f;
     double lastVolume = 0.0;

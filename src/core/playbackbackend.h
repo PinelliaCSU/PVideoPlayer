@@ -5,6 +5,8 @@
 #include <QObject>
 #include <QWidget>
 
+#include "media_types.h"
+
 class PlaybackEventSource : public QObject
 {
     Q_OBJECT
@@ -50,6 +52,8 @@ public:
     virtual bool OnExtractAudio(const QString &inputFile, const QString &outputFile) = 0;
     // 切换视频渲染目标的原生窗口句柄（画中画等场景复用当前播放会话，不中断播放）
     virtual void OnSetRenderTarget(WId playWidgetId) = 0;
+    // 媒体信息快照（线程安全）。尚未打开任何媒体时返回 valid == false
+    virtual MediaInfo mediaInfo() const = 0;
 };
 
 /*

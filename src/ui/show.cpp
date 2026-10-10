@@ -133,7 +133,11 @@ bool Show::eventFilter(QObject *obj, QEvent *event)
         switch (event->type()) {
         case QEvent::MouseButtonPress: {
             QMouseEvent *mouseEvent = static_cast<QMouseEvent *>(event);
-            if (_pipActive && mouseEvent->button() == Qt::LeftButton && _pipWindow) {
+            // 只有左键才切换播放状态，右键留给上下文菜单（查看播放信息等）
+            if (mouseEvent->button() != Qt::LeftButton) {
+                break;
+            }
+            if (_pipActive && _pipWindow) {
                 // 画中画模式下按下先视为拖动起点，松开时未拖动才切换播放状态
                 _pipDragging = true;
                 _pipDragMoved = false;
@@ -404,8 +408,14 @@ void Show::OnVideoContextMenuRequested(const QPoint &pos)
 {
     QMenu menu(this);
     QAction *act_pip = menu.addAction(_pipActive ? tr("退出画中画") : tr("画中画"));
-    if (menu.exec(ui->label->mapToGlobal(pos)) == act_pip) {
+    menu.addSeparator();
+    QAction *act_media_info = menu.addAction(tr("播放信息"));
+
+    QAction *selected = menu.exec(ui->label->mapToGlobal(pos));
+    if (selected == act_pip) {
         SetPipActive(!_pipActive);
+    } else if (selected == act_media_info) {
+        emit SigMediaInfoRequested();
     }
 }
 

@@ -107,6 +107,11 @@ bool AppController::isPlaying() const
     return m_service && m_service->isPlaying();
 }
 
+MediaInfo AppController::mediaInfo() const
+{
+    return m_service ? m_service->mediaInfo() : MediaInfo{};
+}
+
 void AppController::onPlaybackStateChanged()
 {
     updateControlBarPolicy();

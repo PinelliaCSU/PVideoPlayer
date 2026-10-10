@@ -46,6 +46,8 @@ public:
     // 线程安全的状态快照
     PlaybackState state() const;
     bool isPlaying() const;
+    // 当前媒体的信息快照（线程安全），未打开媒体时 valid 为 false
+    MediaInfo mediaInfo() const;
 
 signals:
     void started(const QString &locator);

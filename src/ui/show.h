@@ -57,6 +57,7 @@ signals:
     void SigTogglePlay();   //点击视频实现暂停
     void SigUserInteraction(); // 鼠标或触摸操作，用于唤醒控制栏
     void SigPipActiveChanged(bool active);
+    void SigMediaInfoRequested(); // 右键菜单请求查看播放信息
 private slots:
     void OnToastTimeout();
     void OnShortcutHintTimeout();

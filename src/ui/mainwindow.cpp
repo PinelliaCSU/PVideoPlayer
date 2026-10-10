@@ -10,6 +10,7 @@
 
 #include "appcontroller.h"
 #include "guiutils.h"
+#include "mediainfodialog.h"
 
 MainWindow::MainWindow(AppController *controller, QWidget *parent)
     : QMainWindow(parent)
@@ -117,6 +118,7 @@ void MainWindow::connectUiSignals(){
     connect(ui->show, &Show::SigExitFullScreen, this, &MainWindow::SlotOnFullScreenBtnClicked);
     connect(ui->show, &Show::SigTogglePlay, _controller, &AppController::togglePause);
     connect(ui->show, &Show::SigUserInteraction, _controller, &AppController::notifyUserInteraction);
+    connect(ui->show, &Show::SigMediaInfoRequested, this, &MainWindow::SlotOnShowMediaInfo);
     connect(ui->ctrlBar, &CtrlBar::SigUserInteraction, _controller, &AppController::notifyUserInteraction);
 
     //    状态控制栏的按钮功能
@@ -442,4 +444,12 @@ void MainWindow::SlotOnExtractAudio()
 
     // 提取在播放服务线程执行，结果通过 audioExtractionFinished 通知，避免阻塞 UI
     _controller->extractAudio(inputFile, outputFile);
+}
+
+void MainWindow::SlotOnShowMediaInfo()
+{
+    MediaInfoDialog dialog(this);
+    // 面板打开期间持续取值，缓冲、丢帧等统计随播放实时变化
+    dialog.setInfoProvider([this]() { return _controller->mediaInfo(); });
+    dialog.exec();
 }

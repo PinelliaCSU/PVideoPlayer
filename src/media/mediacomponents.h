@@ -45,6 +45,7 @@ public:
     bool initializeForDecoder(const AVCodec *codec, AVHWDeviceType preferredType);
     AVBufferRef *context() const;
     enum AVPixelFormat pixelFormat() const;
+    enum AVHWDeviceType deviceType() const;
     bool isActive() const;
     // 把硬件解码帧转换为软件帧，使后续渲染/滤镜逻辑无需感知硬件解码
     bool toSoftwareFrame(const AVFrame *hardwareFrame, AVFrame *softwareFrame) const;
@@ -53,6 +54,7 @@ public:
 private:
     AvBufferRefPtr m_context;
     enum AVPixelFormat m_pixelFormat = AV_PIX_FMT_NONE;
+    enum AVHWDeviceType m_deviceType = AV_HWDEVICE_TYPE_NONE;
 };
 
 class AudioOutputDevice final

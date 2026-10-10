@@ -175,6 +175,7 @@ bool HardwareDecoderDevice::initializeForDecoder(const AVCodec *codec, AVHWDevic
                 av_get_pix_fmt_name(selectedFormat) ? av_get_pix_fmt_name(selectedFormat) : "unknown");
     m_context.reset(context);
     m_pixelFormat = selectedFormat;
+    m_deviceType = selectedType;
     return true;
 }
 
@@ -186,6 +187,11 @@ AVBufferRef *HardwareDecoderDevice::context() const
 enum AVPixelFormat HardwareDecoderDevice::pixelFormat() const
 {
     return m_pixelFormat;
+}
+
+enum AVHWDeviceType HardwareDecoderDevice::deviceType() const
+{
+    return m_deviceType;
 }
 
 bool HardwareDecoderDevice::isActive() const
@@ -208,6 +214,7 @@ bool HardwareDecoderDevice::toSoftwareFrame(const AVFrame *hardwareFrame, AVFram
 void HardwareDecoderDevice::reset()
 {
     m_pixelFormat = AV_PIX_FMT_NONE;
+    m_deviceType = AV_HWDEVICE_TYPE_NONE;
     m_context.reset();
 }
 

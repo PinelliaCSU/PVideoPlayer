@@ -1,0 +1,46 @@
+/* 播放信息面板：与播放器整体深色风格保持一致 */
+
+QDialog#MediaInfoDialog {
+    background-color: #202129;
+    border: 1px solid black;
+}
+
+QLabel#MediaInfoTitle {
+    color: white;
+    font-size: 15px;
+}
+
+QPushButton#MediaInfoCloseBtn {
+    background: transparent;
+    border: none;
+    color: #c4c6d2;
+}
+
+/* 鼠标悬浮/按下关闭按钮时与标题栏关闭按钮保持一致的反馈 */
+QPushButton#MediaInfoCloseBtn:hover {
+    color: Tomato;
+}
+
+QPushButton#MediaInfoCloseBtn:pressed {
+    color: red;
+}
+
+QFrame#MediaInfoSeparator {
+    background-color: #3a3b46;
+    border: none;
+}
+
+QLabel#MediaInfoFieldLabel {
+    color: #c4c6d2;
+    font-size: 13px;
+}
+
+QLabel#MediaInfoFieldValue {
+    color: white;
+    font-size: 13px;
+}
+
+QLabel#MediaInfoHint {
+    color: #c4c6d2;
+    font-size: 13px;
+}

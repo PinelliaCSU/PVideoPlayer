@@ -167,6 +167,11 @@ bool PlaybackService::isPlaying() const
     return status == PlaybackStatus::Playing || status == PlaybackStatus::Seeking;
 }
 
+MediaInfo PlaybackService::mediaInfo() const
+{
+    return m_backend ? m_backend->mediaInfo() : MediaInfo{};
+}
+
 void PlaybackService::mutateState(const std::function<void(PlaybackState &)> &mutation)
 {
     {
