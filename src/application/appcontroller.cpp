@@ -85,6 +85,7 @@ void AppController::wirePlaybackSignals()
                                              success ? tr("音频提取完成：%1").arg(inputFile)
                                                      : tr("音频提取失败：%1").arg(inputFile));
             });
+    connect(m_service, &PlaybackService::screenshotFinished, this, &AppController::screenshotFinished);
 
     // 播放进度：转发统一播放状态中的位置与总时长
     connect(m_service, &PlaybackService::positionSecondsChanged, this, &AppController::positionSecondsChanged);
@@ -362,6 +363,13 @@ void AppController::extractAudio(const QString &inputFile, const QString &output
 {
     emit audioExtractionStarted();
     m_service->extractAudio(inputFile, outputFile);
+}
+
+void AppController::captureFrame(const QString &outputFile)
+{
+    if (m_service) {
+        m_service->captureFrame(outputFile);
+    }
 }
 
 // ===== 播放历史与续播 =====

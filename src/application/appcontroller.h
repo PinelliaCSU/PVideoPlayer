@@ -70,6 +70,8 @@ public:
     void subVolume();
     void step();
     void extractAudio(const QString &inputFile, const QString &outputFile);
+    // 截图：把当前显示的视频帧保存为图片文件
+    void captureFrame(const QString &outputFile);
 
     // ===== 播放历史与续播 =====
     QList<PlayHistoryEntry> history() const;
@@ -113,6 +115,8 @@ signals:
     void currentIndexChanged(int row);
     void audioExtractionStarted();
     void audioExtractionFinished(bool success, const QString &message);
+    // 截图完成（成功时 errorMessage 为空）
+    void screenshotFinished(bool success, const QString &outputFile, const QString &errorMessage);
 
     // 控制栏显示策略（由控制器根据播放状态决定）
     void showControlBarRequested();

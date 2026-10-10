@@ -2,6 +2,7 @@
 #include "ui_ctrlbar.h"
 #include <QActionGroup>
 #include <QEvent>
+#include <QFileDialog>
 #include <QMouseEvent>
 #include "guiutils.h"
 #include "configutils.h"
@@ -147,6 +148,56 @@ bool CtrlBar::initUi(){
     //设置提取音频按钮相关
     ui->ExtractAudioBtn->setToolTip("提取视频中的音频并保存为文件");
     GuiUtils::SetIcon(ui->ExtractAudioBtn, 12, QChar(0xf025));  // fa-headphones 图标
+
+    //设置截图按钮相关
+    ui->ScreenshotBtn->setToolTip("截图（Ctrl + S）");
+    GuiUtils::SetIcon(ui->ScreenshotBtn, 12, QChar(0xf030));  // fa-camera 图标
+
+    // ── 截图设置 ──
+    _setting_menu->addSeparator();
+
+    QAction *choose_dir_action = _setting_menu->addAction(tr("截图目录…"));
+    connect(choose_dir_action, &QAction::triggered, this, [this]() {
+        const QString dir = QFileDialog::getExistingDirectory(
+            this, tr("选择截图保存目录"), ConfigUtils::LoadScreenshotDir());
+        if (dir.isEmpty()) {
+            return;
+        }
+        ConfigUtils::SaveScreenshotDir(dir);
+        emit SigShowToast(tr("截图目录：%1").arg(dir));
+    });
+
+    _open_screenshot_dir_action = _setting_menu->addAction(tr("截图后打开目录"));
+    _open_screenshot_dir_action->setCheckable(true);
+    _open_screenshot_dir_action->setChecked(ConfigUtils::LoadOpenScreenshotDir());
+    connect(_open_screenshot_dir_action, &QAction::toggled, this, [](bool open) {
+        ConfigUtils::SaveOpenScreenshotDir(open);
+    });
+
+    QMenu *format_menu = _setting_menu->addMenu(tr("截图格式"));
+    format_menu->setObjectName("ScreenshotFormatMenu");
+    QActionGroup *format_group = new QActionGroup(this);
+    const QString current_format = ConfigUtils::LoadScreenshotFormat();
+    struct {
+        QString text;
+        QString format;
+    } formats[] = {
+        {tr("PNG（无损）"), QStringLiteral("png")},
+        {tr("JPEG（体积小）"), QStringLiteral("jpg")}
+    };
+    for (const auto &item : formats) {
+        QAction *action = format_menu->addAction(item.text);
+        action->setData(item.format);
+        action->setCheckable(true);
+        format_group->addAction(action);
+        action->setChecked(item.format == current_format);
+    }
+    connect(format_menu, &QMenu::triggered, this, [this](QAction *action) {
+        const QString format = action->data().toString();
+        ConfigUtils::SaveScreenshotFormat(format);
+        emit SigShowToast(tr("截图格式：%1").arg(format.toUpper()));
+    });
+
     return true;
 }
 
@@ -173,6 +224,9 @@ void CtrlBar::connectSignalSlots()
 
     //连接获取音频按钮
     connect(ui->ExtractAudioBtn,&QPushButton::clicked,this,&CtrlBar::SigExtractAudio);
+
+    //连接截图按钮
+    connect(ui->ScreenshotBtn, &QPushButton::clicked, this, &CtrlBar::SigCaptureScreenshot);
 
     // 子控件接收鼠标事件时也要唤醒控制栏。
     installEventFilter(this);

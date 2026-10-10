@@ -197,6 +197,30 @@ void AppControllerTest::extractAudioNotifiesStartAndFinish()
     QCOMPARE(finishSpy.last().at(0).toBool(), true);
 }
 
+void AppControllerTest::captureFrameIsForwardedAndReported()
+{
+    FakePlaylistRepository repository;
+    FakePlaybackBackend backend;
+    AppController controller(&backend, &backend, &repository);
+    QVERIFY(controller.init());
+
+    QSignalSpy finishSpy(&controller, &AppController::screenshotFinished);
+
+    controller.captureFrame("D:/shots/frame.png");
+    QTRY_COMPARE_WITH_TIMEOUT(finishSpy.count(), 1, 2000);
+    QCOMPARE(backend.capturedFiles, QStringList{QStringLiteral("D:/shots/frame.png")});
+    QCOMPARE(finishSpy.last().at(0).toBool(), true);
+    QCOMPARE(finishSpy.last().at(1).toString(), QStringLiteral("D:/shots/frame.png"));
+
+    // 后端取帧失败时要把原因带回界面
+    backend.captureSucceeds = false;
+    backend.captureError = QStringLiteral("没有可截图的画面");
+    controller.captureFrame("D:/shots/frame.png");
+    QTRY_COMPARE_WITH_TIMEOUT(finishSpy.count(), 2, 2000);
+    QCOMPARE(finishSpy.last().at(0).toBool(), false);
+    QCOMPARE(finishSpy.last().at(2).toString(), QStringLiteral("没有可截图的画面"));
+}
+
 void AppControllerTest::userInteractionRequestsControlBar()
 {
     FakePlaylistRepository repository;

@@ -10,6 +10,7 @@
 #include <QStringList>
 #include <cmath>
 #include <QMutex>
+#include "framecapture.h"
 #if defined(_WIN32)
 #include <objbase.h>
 #endif
@@ -1603,29 +1604,30 @@ void VideoCtrl::do_exit(VideoState *is) {
     // 重新创建渲染器和纹理--因为渲染器一定会失效，所以我们直接创建一个新的
     if (m_video_output_resources.window()) {
         if (m_video_output_resources.recreateRenderer()) {
-            // 用 m_last_frame 重新创建纹理（av_frame_ref 保证了帧数据在 stream_close 后仍然有效）
+            // 用最后一帧重新创建纹理（引用计数拷贝保证帧数据在 stream_close 后仍然有效）
+            AvFramePtr last_frame = takeLastFrameCopy();
             // 用户主动停止时不保留最后一帧，清空画面
-            if (!m_user_stop && m_last_frame && m_last_frame->width > 0 && m_last_frame->height > 0) {
-                av_log_info("do_exit: recreating texture from m_last_frame, size=%d x %d, format=%d\n",
-                            m_last_frame->width, m_last_frame->height, m_last_frame->format);
-                int sdlPixFmt = m_last_frame->format == AV_PIX_FMT_YUV420P ? SDL_PIXELFORMAT_YV12 : SDL_PIXELFORMAT_ARGB8888;
-                if (m_video_output_resources.ensureTexture(sdlPixFmt, m_last_frame->width, m_last_frame->height,
+            if (!m_user_stop && last_frame && last_frame->width > 0 && last_frame->height > 0) {
+                av_log_info("do_exit: recreating texture from last frame, size=%d x %d, format=%d\n",
+                            last_frame->width, last_frame->height, last_frame->format);
+                int sdlPixFmt = last_frame->format == AV_PIX_FMT_YUV420P ? SDL_PIXELFORMAT_YV12 : SDL_PIXELFORMAT_ARGB8888;
+                if (m_video_output_resources.ensureTexture(sdlPixFmt, last_frame->width, last_frame->height,
                                                           SDL_BLENDMODE_NONE)) {
                     SwsContextPtr sws_ctx;
-                    upload_texture(m_video_output_resources.texture(), m_last_frame.get(), sws_ctx);
+                    upload_texture(m_video_output_resources.texture(), last_frame.get(), sws_ctx);
                     av_log_info("do_exit: texture recreated successfully\n");
                 }
             } else if (m_user_stop) {
                 // 用户主动停止：清空画面，释放最后一帧引用
                 av_log_info("do_exit: user stop, clearing display\n");
-                m_last_frame.reset();
+                clearLastFrame();
                 m_frame_width = 0;
                 m_frame_height = 0;
                 // 清空渲染器为黑色
                 m_video_output_resources.beginFrame();
                 m_video_output_resources.endFrame();
             } else {
-                av_log_info("do_exit: no m_last_frame to recreate texture, m_last_frame=%p\n", (void*)m_last_frame.get());
+                av_log_info("do_exit: no last frame to recreate texture\n");
             }
         }
     }
@@ -2135,10 +2137,7 @@ void VideoCtrl::video_image_display(VideoState *is) {
         m_frame_flip_v = vp->flip_v;
 
         // 保存最后一帧的引用，用于播放结束后重建纹理（av_frame_ref 增加引用计数，保持数据有效）
-        if (!m_last_frame)
-            m_last_frame.reset(av_frame_alloc());
-        av_frame_unref(m_last_frame.get());
-        av_frame_ref(m_last_frame.get(), vp->frame);
+        storeLastFrame(vp->frame);
 
         if (m_frame_width != vp->frame->width || m_frame_height != vp->frame->height) {
             m_frame_width = vp->frame->width;
@@ -2731,7 +2730,9 @@ void VideoCtrl::resetUploadedFlags(VideoState *is)
 
 void VideoCtrl::redrawLastFrame()
 {
-    if (!m_last_frame || m_last_frame->width <= 0 || m_last_frame->height <= 0) {
+    // 取一份引用计数拷贝后再使用，避免与截图线程竞争同一份帧数据
+    const AvFramePtr last_frame = takeLastFrameCopy();
+    if (!last_frame || last_frame->width <= 0 || last_frame->height <= 0) {
         return;
     }
 
@@ -2749,19 +2750,19 @@ void VideoCtrl::redrawLastFrame()
         return;
     }
 
-    const int sdlPixFmt = m_last_frame->format == AV_PIX_FMT_YUV420P ? SDL_PIXELFORMAT_YV12 : SDL_PIXELFORMAT_ARGB8888;
-    if (!m_video_output_resources.ensureTexture(sdlPixFmt, m_last_frame->width, m_last_frame->height, SDL_BLENDMODE_NONE)) {
+    const int sdlPixFmt = last_frame->format == AV_PIX_FMT_YUV420P ? SDL_PIXELFORMAT_YV12 : SDL_PIXELFORMAT_ARGB8888;
+    if (!m_video_output_resources.ensureTexture(sdlPixFmt, last_frame->width, last_frame->height, SDL_BLENDMODE_NONE)) {
         return;
     }
 
     SwsContextPtr sws_ctx;
-    if (upload_texture(m_video_output_resources.texture(), m_last_frame.get(), sws_ctx) < 0) {
+    if (upload_texture(m_video_output_resources.texture(), last_frame.get(), sws_ctx) < 0) {
         return;
     }
 
-    m_frame_width = m_last_frame->width;
-    m_frame_height = m_last_frame->height;
-    m_frame_sar = m_last_frame->sample_aspect_ratio;
+    m_frame_width = last_frame->width;
+    m_frame_height = last_frame->height;
+    m_frame_sar = last_frame->sample_aspect_ratio;
 
     if (g_show_rect_mutex.tryLock()) {
         m_video_output_resources.beginFrame();
@@ -2772,6 +2773,69 @@ void VideoCtrl::redrawLastFrame()
         m_video_output_resources.endFrame();
         g_show_rect_mutex.unlock();
     }
+}
+
+AvFramePtr VideoCtrl::takeLastFrameCopy() const
+{
+    QMutexLocker locker(&m_last_frame_mutex);
+    if (!m_last_frame) {
+        return AvFramePtr();
+    }
+    AvFramePtr copy(av_frame_alloc());
+    if (!copy || av_frame_ref(copy.get(), m_last_frame.get()) < 0) {
+        return AvFramePtr();
+    }
+    return copy;
+}
+
+void VideoCtrl::storeLastFrame(const AVFrame *frame)
+{
+    if (frame == nullptr) {
+        return;
+    }
+    QMutexLocker locker(&m_last_frame_mutex);
+    if (!m_last_frame) {
+        m_last_frame.reset(av_frame_alloc());
+    }
+    if (!m_last_frame) {
+        return;
+    }
+    av_frame_unref(m_last_frame.get());
+    av_frame_ref(m_last_frame.get(), frame);
+}
+
+void VideoCtrl::clearLastFrame()
+{
+    QMutexLocker locker(&m_last_frame_mutex);
+    m_last_frame.reset();
+}
+
+bool VideoCtrl::OnCaptureFrame(const QString &outputFile, QString *errorMessage)
+{
+    const auto fail = [errorMessage](const QString &message) {
+        if (errorMessage) {
+            *errorMessage = message;
+        }
+        return false;
+    };
+
+    if (outputFile.isEmpty()) {
+        return fail(tr("截图路径为空"));
+    }
+    /*
+     * 截图命令在命令线程执行，这里只取一份最后一帧的拷贝，
+     * 像素格式转换与图片编码都交给 FrameCapture，避免跨线程持有解码资源。
+     */
+    const AvFramePtr frame = takeLastFrameCopy();
+    if (!frame) {
+        return fail(tr("没有可截图的画面"));
+    }
+
+    const FrameCapture::Result result = FrameCapture::saveFrame(frame.get(), outputFile);
+    if (!result.success) {
+        return fail(result.error);
+    }
+    return true;
 }
 
 void VideoCtrl::updateMediaInfo(VideoState *is)

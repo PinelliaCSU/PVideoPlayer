@@ -2,6 +2,7 @@
 #include <QSettings>
 #include <QDir>
 #include <QStandardPaths>
+#include "screenshotutils.h"
 #include "settingsrepository.h"
 
 namespace {
@@ -115,6 +116,47 @@ QList<PlayHistoryItem> LoadPlayHistory()
     settings.endArray();
     settings.endGroup();
     return history;
+}
+
+// ========== 截图 ==========
+
+QString LoadScreenshotDir()
+{
+    const QSettingsRepository settings = repository();
+    const QString saved = settings.value("screenshot/dir").toString();
+    return saved.isEmpty() ? ScreenshotUtils::defaultDirectory() : saved;
+}
+
+void SaveScreenshotDir(const QString& dir)
+{
+    QSettingsRepository settings = repository();
+    settings.setValue("screenshot/dir", dir);
+}
+
+QString LoadScreenshotFormat()
+{
+    const QSettingsRepository settings = repository();
+    const QString format = settings.value("screenshot/format").toString().toLower();
+    return format.isEmpty() ? QStringLiteral("png") : format;
+}
+
+void SaveScreenshotFormat(const QString& format)
+{
+    QSettingsRepository settings = repository();
+    settings.setValue("screenshot/format", format.toLower());
+}
+
+bool LoadOpenScreenshotDir()
+{
+    const QSettingsRepository settings = repository();
+    // 默认不自动打开文件夹，避免每次截图都弹出资源管理器
+    return settings.value("screenshot/open_dir", false).toBool();
+}
+
+void SaveOpenScreenshotDir(bool open)
+{
+    QSettingsRepository settings = repository();
+    settings.setValue("screenshot/open_dir", open);
 }
 
 

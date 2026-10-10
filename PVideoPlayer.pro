@@ -13,8 +13,10 @@ SOURCES += \
     src/application/main.cpp \
     src/core/clockcontroller.cpp \
     src/core/configutils.cpp \
+    src/core/screenshotutils.cpp \
     src/core/settingsrepository.cpp \
     src/media/audioextractionservice.cpp \
+    src/media/framecapture.cpp \
     src/media/mediacomponents.cpp \
     src/media/medialocator.cpp \
     src/media/mediainfoservice.cpp \
@@ -49,8 +51,10 @@ HEADERS += \
     src/core/media_raii.h \
     src/core/media_types.h \
     src/core/playbackbackend.h \
+    src/core/screenshotutils.h \
     src/core/settingsrepository.h \
     src/media/audioextractionservice.h \
+    src/media/framecapture.h \
     src/media/mediacomponents.h \
     src/media/medialocator.h \
     src/media/mediainfoservice.h \

@@ -61,6 +61,7 @@ signals:
     void SigAlwaysOnTopToggled(bool on);    //窗口置顶切换
 
     void SigExtractAudio(); //获取音频信号
+    void SigCaptureScreenshot(); //截图
 private slots:
     void on_SpeedBtn_clicked();
     void OnSpeedMenuTriggered(QAction* action);
@@ -77,6 +78,7 @@ private:
     QMenu *_setting_menu; //设置菜单
 
     QAction *_always_on_top_action; // 窗口置顶动作
+    QAction *_open_screenshot_dir_action; // 截图后打开目录动作
 };
 
 #endif // CTRLBAR_H

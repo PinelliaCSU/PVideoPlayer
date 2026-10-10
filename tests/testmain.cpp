@@ -9,6 +9,7 @@
 #include "tst_playbackservice.h"
 #include "tst_playbacksettings.h"
 #include "tst_playlist.h"
+#include "tst_screenshotutils.h"
 #include "tst_subtitleplugin.h"
 
 namespace {
@@ -80,6 +81,7 @@ int main(int argc, char *argv[])
     PVP_RUN_SUITE(PlaybackServiceTest);
     PVP_RUN_SUITE(PlaybackSettingsTest);
     PVP_RUN_SUITE(PlaylistTest);
+    PVP_RUN_SUITE(ScreenshotUtilsTest);
     PVP_RUN_SUITE(AppControllerTest);
     return status;
 }

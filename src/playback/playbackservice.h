@@ -41,6 +41,8 @@ public:
     void step();
     // 音频提取在服务线程执行，完成后通过 audioExtractionFinished 通知，避免阻塞 UI
     void extractAudio(const QString &inputFile, const QString &outputFile);
+    // 截图同样在服务线程执行，避免界面线程等待视频帧
+    void captureFrame(const QString &outputFile);
     void setRenderTarget(WId playWidgetId);
 
     // 线程安全的状态快照
@@ -65,6 +67,7 @@ signals:
     void playbackError(PlaybackErrorCode code, const QString &message);
     void stateChanged(const PlaybackState &state);
     void audioExtractionFinished(bool success, const QString &inputFile, const QString &outputFile);
+    void screenshotFinished(bool success, const QString &outputFile, const QString &errorMessage);
 
 private:
     PlaybackEventSource *m_events;

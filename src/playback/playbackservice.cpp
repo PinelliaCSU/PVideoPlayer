@@ -150,6 +150,15 @@ void PlaybackService::extractAudio(const QString &inputFile, const QString &outp
     });
 }
 
+void PlaybackService::captureFrame(const QString &outputFile)
+{
+    enqueue([this, outputFile]() {
+        QString errorMessage;
+        const bool success = m_backend->OnCaptureFrame(outputFile, &errorMessage);
+        emit screenshotFinished(success, outputFile, errorMessage);
+    });
+}
+
 void PlaybackService::setRenderTarget(WId playWidgetId)
 {
     enqueue([this, playWidgetId]() { m_backend->OnSetRenderTarget(playWidgetId); });

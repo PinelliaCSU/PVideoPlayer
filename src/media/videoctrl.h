@@ -62,6 +62,9 @@ public:
     //获取音频
     bool OnExtractAudio(const QString &inputFile, const QString &outputFile) override;
 
+    // 截图：把当前显示的视频帧保存为图片文件
+    bool OnCaptureFrame(const QString &outputFile, QString *errorMessage = nullptr) override;
+
     // 切换渲染目标原生窗口（画中画）：保持当前播放会话，在新的窗口上重建渲染资源
     void OnSetRenderTarget(WId play_wid) override;
 
@@ -127,6 +130,11 @@ private:
     void sub_volume();
     void update_speed(float speed);
 
+    // 截图：返回最近显示的一帧（引用计数拷贝），无可用帧时返回空
+    AvFramePtr takeLastFrameCopy() const;
+    void storeLastFrame(const AVFrame *frame);
+    void clearLastFrame();
+
     // 打开媒体后采集静态媒体信息；缓冲统计在播放过程中由 refreshMediaInfoBuffers 刷新
     void updateMediaInfo(VideoState *is);
     void refreshMediaInfoBuffers(VideoState *is);
@@ -151,6 +159,11 @@ private:
     bool m_video_open; // 视频窗口打开状态
     AVRational m_frame_sar;            // 当前帧的宽高比
     bool m_frame_flip_v;               // 当前帧是否垂直翻转
+    /*
+     * 最后一帧由渲染线程写入、截图命令线程读取，统一通过 m_last_frame_mutex 访问，
+     * 避免截图时读到正在被替换的帧数据。
+     */
+    mutable QMutex m_last_frame_mutex;
     AvFramePtr m_last_frame;             // 最后一帧的引用由 RAII 管理
     bool m_idle_loop;                   // 空闲事件循环运行标志（true=运行中，类似 m_play_loop）
     bool m_user_stop;                   // 用户主动停止标志（区分自然播放结束和用户点击停止）

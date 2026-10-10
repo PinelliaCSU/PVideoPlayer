@@ -53,6 +53,8 @@ private:
     void initMenu();
     void SlotOnAlwaysOnTopToggled(bool on);
     void SlotOnExtractAudio();
+    void SlotOnCaptureScreenshot();
+    void SlotOnScreenshotFinished(bool success, const QString &outputFile, const QString &errorMessage);
     void SlotOnShowMediaInfo();
     void ShowControlBar();
     void OnResumeAvailable(const QString &locator, int positionSeconds, int totalSeconds);

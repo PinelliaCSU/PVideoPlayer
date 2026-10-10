@@ -21,9 +21,11 @@ SOURCES += \
     tst_playbackservice.cpp \
     tst_playbacksettings.cpp \
     tst_playlist.cpp \
+    tst_screenshotutils.cpp \
     tst_subtitleplugin.cpp \
     ../src/application/appcontroller.cpp \
     ../src/core/configutils.cpp \
+    ../src/core/screenshotutils.cpp \
     ../src/core/settingsrepository.cpp \
     ../src/media/mediainfoservice.cpp \
     ../src/media/medialocator.cpp \
@@ -49,11 +51,13 @@ HEADERS += \
     tst_playbackservice.h \
     tst_playbacksettings.h \
     tst_playlist.h \
+    tst_screenshotutils.h \
     tst_subtitleplugin.h \
     ../src/application/appcontroller.h \
     ../src/core/configutils.h \
     ../src/core/media_types.h \
     ../src/core/playbackbackend.h \
+    ../src/core/screenshotutils.h \
     ../src/core/settingsrepository.h \
     ../src/media/mediainfoservice.h \
     ../src/media/medialocator.h \

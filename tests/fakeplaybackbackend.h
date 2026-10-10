@@ -1,6 +1,8 @@
 #ifndef FAKEPLAYBACKBACKEND_H
 #define FAKEPLAYBACKBACKEND_H
 
+#include <QStringList>
+
 #include "../src/core/playbackbackend.h"
 
 class FakePlaybackBackend final : public PlaybackEventSource, public IPlaybackBackend
@@ -74,6 +76,18 @@ public:
         return true;
     }
 
+    bool OnCaptureFrame(const QString &outputFile, QString *errorMessage) override
+    {
+        capturedFiles.append(outputFile);
+        if (!captureSucceeds) {
+            if (errorMessage) {
+                *errorMessage = captureError;
+            }
+            return false;
+        }
+        return true;
+    }
+
     void OnSetRenderTarget(WId playWidgetId) override
     {
         lastRenderTarget = playWidgetId;
@@ -96,6 +110,9 @@ public:
     int renderTargetCount = 0;
     WId lastRenderTarget = 0;
     bool paused = false;
+    QStringList capturedFiles;
+    bool captureSucceeds = true;
+    QString captureError;
 };
 
 #endif // FAKEPLAYBACKBACKEND_H

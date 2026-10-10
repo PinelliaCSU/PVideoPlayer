@@ -19,6 +19,7 @@ private slots:
     void playNextFollowsPlayMode();
     void renderTargetIsForwarded();
     void extractAudioNotifiesStartAndFinish();
+    void captureFrameIsForwardedAndReported();
     void userInteractionRequestsControlBar();
     void playbackStateDrivesControlBarPolicy();
     void controlBarHidesWhilePlayingDespiteProgressUpdates();

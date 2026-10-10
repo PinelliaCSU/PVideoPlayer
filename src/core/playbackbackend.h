@@ -50,6 +50,8 @@ public:
     virtual void OnSubVolume() = 0;
     virtual void OnStep() = 0;
     virtual bool OnExtractAudio(const QString &inputFile, const QString &outputFile) = 0;
+    // 把当前显示的视频帧保存为图片文件（png/jpg 等由扩展名决定），无可用帧时返回 false
+    virtual bool OnCaptureFrame(const QString &outputFile, QString *errorMessage = nullptr) = 0;
     // 切换视频渲染目标的原生窗口句柄（画中画等场景复用当前播放会话，不中断播放）
     virtual void OnSetRenderTarget(WId playWidgetId) = 0;
     // 媒体信息快照（线程安全）。尚未打开任何媒体时返回 valid == false

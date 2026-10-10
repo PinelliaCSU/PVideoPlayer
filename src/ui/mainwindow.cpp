@@ -3,14 +3,18 @@
 
 #include <QIcon>
 #include <QMessageBox>
+#include <QDesktopServices>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QInputDialog>
 #include <QShortcut>
+#include <QUrl>
 
 #include "appcontroller.h"
+#include "configutils.h"
 #include "guiutils.h"
 #include "mediainfodialog.h"
+#include "screenshotutils.h"
 
 MainWindow::MainWindow(AppController *controller, QWidget *parent)
     : QMainWindow(parent)
@@ -132,6 +136,7 @@ void MainWindow::connectUiSignals(){
     connect(ui->ctrlBar, &CtrlBar::SigPlaySeek, _controller, &AppController::seek);
     connect(ui->ctrlBar, &CtrlBar::SigShowToast, ui->show, &Show::ShowToast);
     connect(ui->ctrlBar, &CtrlBar::SigExtractAudio, this, &MainWindow::SlotOnExtractAudio);
+    connect(ui->ctrlBar, &CtrlBar::SigCaptureScreenshot, this, &MainWindow::SlotOnCaptureScreenshot);
 
     // 设置按钮相关
     connect(ui->ctrlBar, &CtrlBar::SigPlayModeChanged, _controller, &AppController::setPlayMode);
@@ -184,6 +189,10 @@ void MainWindow::connectControllerSignals(){
             this, [this](bool, const QString &message) {
                 ui->show->ShowToast(message);
             });
+
+    // 截图
+    connect(_controller, &AppController::screenshotFinished,
+            this, &MainWindow::SlotOnScreenshotFinished);
 }
 
 void MainWindow::ShowControlBar()
@@ -293,6 +302,7 @@ void MainWindow::initMenu(){
     QAction* act_open_file = open_menu->addAction(tr("打开文件 \t Ctrl + F"));
     QAction* act_open_stream = open_menu->addAction(tr("打开视频流 \t Ctrl + L"));
     QAction* act_full_screen = _menu.addAction(tr("全屏/取消全屏 \t F11"));
+    QAction* act_screenshot = _menu.addAction(tr("截图 \t Ctrl + S"));
     QAction* act_pip = _menu.addAction(tr("画中画 \t Ctrl + P"));
     act_pip->setCheckable(true);
     connect(act_pip, &QAction::triggered, this, [this](bool checked) {
@@ -367,17 +377,22 @@ void MainWindow::initMenu(){
         this->SlotOnFullScreenBtnClicked();
     });
 
+    connect(act_screenshot, &QAction::triggered, this, &MainWindow::SlotOnCaptureScreenshot);
+
     // 添加快捷键(由于QMenu没有焦点，故只能再次添加到当前窗口上)
     act_about->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_A));
     act_open_file->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_F));
     act_open_stream->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_L));
     act_full_screen->setShortcut(QKeySequence(Qt::Key_F11));
+    act_screenshot->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_S));
     act_pip->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_P));
 
     // 将行为设置为应用全局有效（F11需要全局生效，因为全屏时焦点在Show窗口上）
     act_full_screen->setShortcutContext(Qt::ApplicationShortcut);
     // 画中画时焦点可能在悬浮小窗上，快捷键同样需要全局生效
     act_pip->setShortcutContext(Qt::ApplicationShortcut);
+    // 全屏时截图快捷键也要生效
+    act_screenshot->setShortcutContext(Qt::ApplicationShortcut);
 
     registerShortcuts();
 
@@ -386,6 +401,7 @@ void MainWindow::initMenu(){
     this->addAction(act_open_file);
     this->addAction(act_open_stream);
     this->addAction(act_full_screen);
+    this->addAction(act_screenshot);
     this->addAction(act_pip);
 }
 
@@ -452,4 +468,36 @@ void MainWindow::SlotOnShowMediaInfo()
     // 面板打开期间持续取值，缓冲、丢帧等统计随播放实时变化
     dialog.setInfoProvider([this]() { return _controller->mediaInfo(); });
     dialog.exec();
+}
+
+void MainWindow::SlotOnCaptureScreenshot()
+{
+    const QString locator = _controller->state().currentLocator;
+    if (locator.isEmpty()) {
+        ui->show->ShowToast(tr("没有正在播放的视频"));
+        return;
+    }
+
+    const QString fileName = ScreenshotUtils::buildFileName(
+        locator, QDateTime::currentDateTime(), ConfigUtils::LoadScreenshotFormat());
+    const QString outputFile = ScreenshotUtils::uniquePath(ConfigUtils::LoadScreenshotDir(), fileName);
+
+    // 取帧与编码在播放服务线程完成，结果由 screenshotFinished 通知
+    _controller->captureFrame(outputFile);
+}
+
+void MainWindow::SlotOnScreenshotFinished(bool success, const QString &outputFile,
+                                          const QString &errorMessage)
+{
+    if (!success) {
+        ui->show->ShowToast(tr("截图失败：%1").arg(errorMessage));
+        return;
+    }
+
+    // 截图文件名中包含视频名与时间戳，提示里带上文件名便于确认
+    ui->show->ShowToast(tr("截图已保存：%1").arg(QFileInfo(outputFile).fileName()));
+
+    if (ConfigUtils::LoadOpenScreenshotDir()) {
+        QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(outputFile).absolutePath()));
+    }
 }

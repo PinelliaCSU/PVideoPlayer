@@ -34,6 +34,17 @@ struct PlayHistoryItem {
 void SavePlayHistory(const QList<PlayHistoryItem>& history);
 QList<PlayHistoryItem> LoadPlayHistory();
 
+// ========== 截图 ==========
+// 截图保存目录；未设置时使用系统图片目录下的 PVideoPlayer 子目录
+QString LoadScreenshotDir();
+void SaveScreenshotDir(const QString& dir);
+// 截图格式（png / jpg）
+QString LoadScreenshotFormat();
+void SaveScreenshotFormat(const QString& format);
+// 截图后是否自动打开所在目录
+bool LoadOpenScreenshotDir();
+void SaveOpenScreenshotDir(bool open);
+
 
 const int MAX_SLIDER_VALUE = 65536;
 } // namespace Config
